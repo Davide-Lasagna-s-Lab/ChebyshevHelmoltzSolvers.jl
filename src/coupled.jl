@@ -1,70 +1,106 @@
 using StaticArrays
 
 export CoupledHelmoltzSolver
-# Solve the problem
-#
-#       / θ₀ u''(y) - θ₁ u(y)        = r(y)
-#      |  θ₂ v''(y) - θ₃ v(y) - u(y) = 0
-#       \ v(±1) = v'(±1) = 0
-#
-# using the Chebychev tau method with an influence matrix technique,
-# and return the solution `v`, overwriting the input argument `r`.
 
+"""
+    CoupledHelmoltzSolver(P, T=Float64)
+
+Cache the Chebyshev tau solve of the factored fourth-order problem
+```text
+θ₀*u'' - θ₁*u = r,
+θ₂*v'' - θ₃*v = u,
+v(±1) = v'(±1) = 0,
+```
+on `[-1, 1]`, using expansions of degree `P ≥ 2` and coefficient type `T`.
+
+Store two scalar Helmholtz solvers, a particular-solution workspace, two
+homogeneous influence responses and their 2×2 influence matrix. Call
+[`update!`](@ref) with the four operator coefficients before [`solve!`](@ref).
+This solver returns `v`; the intermediate field `u` is not retained.
+"""
 struct CoupledHelmoltzSolver{T, P, H<:HelmoltzSolver{T, P}, C<:ChebCoeffs{T, P}}
-    hu::H
-    hv::H
-    vₛ::NTuple{3, C}
+       hu::H                    # factors for θ₀*D² - θ₁
+       hv::H                    # factors for θ₂*D² - θ₃
+       vₛ::NTuple{3, C}         # particular workspace and two cached responses
+    A_inf::MMatrix{2, 2, T, 4}  # influence matrix, filled by update!
+
     function CoupledHelmoltzSolver(P::Int, ::Type{T}=Float64) where {T}
         hu = HelmoltzSolver(P, T)
         hv = HelmoltzSolver(P, T)
-        vₛ = ntuple(i->ChebCoeffs(P, T), 3)
-        return new{T, P, typeof(hu), typeof(vₛ[1])}(hu, hv, vₛ)
+        vₛ = ntuple(_ -> ChebCoeffs(P, T), 3)
+        A_inf = MMatrix{2, 2, T}(undef)
+        return new{T, P, typeof(hu), typeof(vₛ[1])}(hu, hv, vₛ, A_inf)
     end
 end
 
-function update!(solver::CoupledHelmoltzSolver, θs::NTuple{4, Real})
-    # expand coeffs
-    θ₀, θ₁, θ₂, θ₃ = θs
+"""
+    update!(solver::CoupledHelmoltzSolver, θs)
 
-    # update the quasi-tridiagonal solvers with coefficients
-    # this also triggers the UL factorisation of the systems
+Assemble and factorise the two scalar operators for
+`θs = (θ₀, θ₁, θ₂, θ₃)`. Call again whenever an operator coefficient changes.
+
+Compute the two homogeneous responses and their 2×2 influence matrix once
+for these coefficients. They depend only on the operators and are preserved
+by subsequent `solve!` calls. Return `nothing`.
+"""
+function update!(solver::CoupledHelmoltzSolver,
+                     θs::NTuple{4, Real})
+    θ₀, θ₁, θ₂, θ₃ = θs
     update!(solver.hu, θ₀, θ₁)
     update!(solver.hv, θ₂, θ₃)
 
-    return nothing
-end
+    # Reset the forcing when rebuilding the cached homogeneous responses.
+    _, v₊, v₋ = solver.vₛ
+    fill!(parent(v₊), 0)
+    fill!(parent(v₋), 0)
 
-function solve!(solver::CoupledHelmoltzSolver{T, P}, r::ChebCoeffs{T, P}) where {T, P}
-    # aliases for the partial solutions
-    vₚ, v₊, v₋ = solver.vₛ
-
-    # `vₚ` and will be overwritten with the solution of the inhomogeneous
-    # B problem and eventually with the full solution `v`.
-    vₚ.data .= r.data
-    v₊.data .= 0
-    v₋.data .= 0
-
-    # ~~~~ Solve the three different problems ~~~
-    # inhomogeneous B problem
-    solve!(solver.hu, vₚ, 0, 0)
-    solve!(solver.hv, vₚ, 0, 0)
-
-    # homogeneous B+ problem
+    # Unit u at the upper/lower wall, respectively, and zero v at both walls.
+    # The scalar backend takes upper then lower boundary values.
     solve!(solver.hu, v₊, 1, 0)
     solve!(solver.hv, v₊, 0, 0)
-
-    # homogeneous b_ problem
     solve!(solver.hu, v₋, 0, 1)
     solve!(solver.hv, v₋, 0, 0)
 
-    # ~~~~ Influence matrix equations ~~~
-    #  Note that julia is column major
-    A = SMatrix{2, 2}( _ddy(v₊, Val(:right)),  _ddy(v₊, Val(:left)), _ddy(v₋, Val(:right)), _ddy(v₋, Val(:left)))
-    b = SVector{2}(-_ddy(vₚ, Val(:right)), -_ddy(vₚ, Val(:left)))
-    δ₊, δ₋ = A\b
+    # Rows select the upper/lower wall; columns select the two responses.
+    solver.A_inf[1, 1] = endpoint_derivative(v₊, :right)
+    solver.A_inf[2, 1] = endpoint_derivative(v₊, :left)
+    solver.A_inf[1, 2] = endpoint_derivative(v₋, :right)
+    solver.A_inf[2, 2] = endpoint_derivative(v₋, :left)
+    return nothing
+end
 
-    # construct full solution
-    r.data .= vₚ.data .+ δ₊ .* v₊.data .+ δ₋ .* v₋.data
+"""
+    solve!(solver::CoupledHelmoltzSolver, r::ChebCoeffs)
 
+Overwrite the source coefficients `r` with the solution `v` and return `r`.
+The source must have the solver's degree and element type, with storage
+distinct from the solver's workspaces.
+
+Solve the two scalar tau equations successively for a particular solution.
+Then use the homogeneous responses and influence matrix cached by `update!`
+to choose their amplitudes and impose `v'(±1) = 0`. All three velocity
+responses already satisfy `v(±1) = 0`. Each call requires only two scalar
+Helmholtz solves and one 2×2 solve.
+
+Call `update!` before the first solve and whenever the operator coefficients
+change. The influence matrix must be nonsingular. Only the particular solution
+and scalar-solver workspaces are overwritten; the homogeneous responses and
+influence matrix are preserved. One solver instance must not be used concurrently.
+"""
+function solve!(solver::CoupledHelmoltzSolver{T, P},
+                     r::ChebCoeffs{T, P}) where {T, P}
+    vₚ, v₊, v₋ = solver.vₛ
+    parent(vₚ) .= parent(r)
+
+    # Particular solution: choose zero wall values for the intermediate u.
+    solve!(solver.hu, vₚ, 0, 0)
+    solve!(solver.hv, vₚ, 0, 0)
+
+    # Cancel the particular solution's wall derivatives using the cached matrix.
+    b = SVector{2}(-endpoint_derivative(vₚ, :right),
+                   -endpoint_derivative(vₚ, :left))
+    δ₊, δ₋ = SMatrix(solver.A_inf)\b
+
+    parent(r) .= parent(vₚ) .+ δ₊ .* parent(v₊) .+ δ₋ .* parent(v₋)
     return r
 end

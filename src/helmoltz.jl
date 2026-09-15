@@ -1,103 +1,126 @@
 export HelmoltzSolver, solve!, update!
 
-# Helmoltz solver
-mutable struct HelmoltzSolver{T, P, Q<:QuasiTridiagonal, V<:Vector{T}}
-    Be::Q #
-    Bo::Q #
-    ge::V #
-    go::V #
-    l::V  #
-    d::V  #
-    u::V  #
+"""
+    HelmoltzSolver(P, T=Float64)
+
+Cache the Chebyshev tau solve of `θ₀*u'' - θ₁*u = f` on `[-1, 1]`, with
+Dirichlet wall values. `P ≥ 2` is the polynomial degree, so each expansion
+contains `P + 1` ordinary coefficients in `u(y) = sum(u[p]*T_p(y), p=0:P)`.
+Call `update!` before solving, and again whenever `θ₀` or `θ₁` changes.
+
+The even/odd systems correspond to `Ae_`/`Ao_` in Channelflow's
+`channelflow/helmholtz.cpp`. Channelflow uses even `P` (an odd number of
+coefficients); this implementation also supports odd `P`. Factors and
+right-hand-side workspaces are reused, so one solver must not be used
+concurrently. The scalar factorisation uses UL elimination without pivoting;
+the supplied operator must have nonzero pivots.
+"""
+mutable struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, V<:Vector{T}}
+    Be::QE  # factorisation for even Chebyshev coefficients
+    Bo::QO  # factorisation for odd Chebyshev coefficients
+    ge::V   # even right-hand side and solution
+    go::V   # odd right-hand side and solution
+     l::V   # lower coefficient of the integrated tau equations
+     d::V   # diagonal coefficient, stored with the opposite RHS sign
+     u::V   # upper coefficient of the integrated tau equations
+
     function HelmoltzSolver(P::Int, ::Type{T}=Float64) where {T}
-        # only available for an even number of expansion coefficients
-        isodd(P) || throw(ArgumentError("P must be odd: got $P"))
+        P ≥ 2 || throw(ArgumentError("P must be at least 2: got $P"))
 
-        # this is the size of the problems to be solved
-        M = div(P+1, 2)
+        # Include coefficient zero in the even block. With even P this
+        # block has one more entry, as in Gibson's HelmholtzSolver.
+        Me, Mo = div(P, 2) + 1, div(P+1, 2)
 
-        # create two banded solver of half the size
-        Be = QuasiTridiagonal(M, T)
-        Bo = QuasiTridiagonal(M, T)
+        Be = QuasiTridiagonal(Me, T)
+        Bo = QuasiTridiagonal(Mo, T)
 
-        # these are the right hand sides
-        ge = zeros(T, M)
-        go = zeros(T, M)
+        ge = zeros(T, Me)
+        go = zeros(T, Mo)
 
         _c(p)    = p == 0  ? 2 : 1
         _β(p, P) = p > P-2 ? 0 : 1
 
-        # precompute and store coefficient of the equations from p = 2:P
-        l, d, u = zeros(T, P), zeros(T, P), zeros(T, P) 
-        for p ∈ 2:P # so that l[p] does not know about julia 1-based indexing
+        # Cache the integration coefficients by polynomial degree p.
+        # Entry 1 is unused; each row couples degrees p-2, p and p+2.
+        l, d, u = zeros(T, P), zeros(T, P), zeros(T, P)
+        for p ∈ 2:P
             l[p] = _c(p-2)/(4p*(p-1))
             d[p] = _β(p, P)/2/(p^2 - 1)
             u[p] = _β(p+2, P)/(4*p*(p+1))
         end
 
-        return new{T, P, QuasiTridiagonal{T, M}, Vector{T}}(Be, Bo, ge, go, l, d, u)
+        return new{T, P, typeof(Be), typeof(Bo), Vector{T}}(Be, Bo, ge, go, l, d, u)
     end
 end
 
 """
-    Update the banded solvers with new coefficients and factorise.
+    update!(h::HelmoltzSolver, θ₀, θ₁)
+
+Assemble and UL-factorise the even and odd systems for `θ₀*u'' - θ₁*u = f`.
+For a physical interval `[a, b]`, use `θ₀ = ν*(2/(b-a))^2` and `θ₁ = λ`
+to represent Gibson's operator `ν*d²/dy² - λ`. The right-hand side and wall
+values are not rescaled.
+
+Reassemble all matrix entries before factorisation, replacing any previous
+factors. Subsequent solves reuse these factors until the next update.
+Return `nothing`.
 """
-function update!(h::HelmoltzSolver{T, P}, θ₀::Real, θ₁::Real) where {T, P}
-    # size of the two banded systems
-    M = div(P+1, 2)
-
-    # update matrix elements
-    h.Be.b .= 1
-    h.Bo.b .= 1
-
-    # Test case: assume P = 7 and M = (P+1)/2 = 4
-    # We have these even and odd coefficients
-    # u₀,     u₂,     u₄,     u₆,
-    #     u₁,     u₃,     u₅,     u₇
-    @simd for i ∈ 1:M-1
-        h.Be.l[i] =     -θ₁*h.l[2i]
-        h.Bo.l[i] =     -θ₁*h.l[2i+1]
-        h.Be.d[i] = θ₀ + θ₁*h.d[2i]
-        h.Bo.d[i] = θ₀ + θ₁*h.d[2i+1]
-        i < M-1 && (h.Be.u[i] = - θ₁*h.u[2i])
-        i < M-1 && (h.Bo.u[i] = - θ₁*h.u[2i+1])
+function update!( h::HelmoltzSolver{T, P},
+                 θ₀::Real,
+                 θ₁::Real) where {T, P}
+    # Row one imposes the sum of the even or odd coefficients. The
+    # remaining rows contain the integrated equations for p = 2, 4, ...
+    # or p = 3, 5, ..., respectively.
+    for (B, p₀) in ((h.Be, 2), (h.Bo, 3))
+        M = size(B, 1)
+        B.b .= 1
+        @simd for i ∈ 1:M-1
+            p = p₀ + 2*(i-1)
+            B.l[i] =     -θ₁*h.l[p]
+            B.d[i] = θ₀ + θ₁*h.d[p]
+            i < M-1 && (B.u[i] = -θ₁*h.u[p])
+        end
+        ul!(B)
     end
-
-    ul!(h.Bo)
-    ul!(h.Be)
 
     return nothing
 end
 
+"""
+    solve!(h::HelmoltzSolver, f::ChebCoeffs, u₊, u₋)
 
-function solve!(h::HelmoltzSolver{T, P}, f::ChebCoeffs{T, P}, u₊::Real, u₋::Real) where {T, P}
-    # size fo the problem
-    M = div(P+1, 2)
+Overwrite the Chebyshev coefficients `f` with the solution, using the factors
+from `update!`. Boundary arguments are `u(+1)` then `u(-1)`; Channelflow's
+`solve(u, f, ua, ub)` uses the reverse order. The two highest residual
+coefficients are tau terms, so the equation is imposed only through degree
+`P - 2`.
 
-    # apply boundary conditions
-    @inbounds begin
-        h.ge[1] = (u₊+u₋)*0.5
-        h.go[1] = (u₊-u₋)*0.5
+`f` must have the solver's degree and element type, with storage distinct
+from its internal workspaces. Real boundary amplitudes `u₊` and `u₋` may
+change between solves without rebuilding the factors. Return the overwritten
+`f`; the factors are preserved and the right-hand-side workspaces are reused.
+"""
+function solve!( h::HelmoltzSolver{T, P},
+                 f::ChebCoeffs{T, P},
+                u₊::Real,
+                u₋::Real) where {T, P}
+    h.ge[1] = (u₊+u₋)*0.5
+    h.go[1] = (u₊-u₋)*0.5
 
-        # we start from 2, after the BC
-        @simd for i ∈ 2:M
-            p = 2*(i-1) # even modes: write equations for p = 2, 4, 6
-            fₚ₊₂ =  p+2 ≥ P ? zero(T) : f[p+2]
-            h.ge[i] = h.l[p] * f[p-2] - h.d[p] * f[p] + h.u[p] * fₚ₊₂
-        
-            p = 2*i-1  # odd modes: write equations for p = 3, 5, 7
-            fₚ₊₂ =  p+2 ≥ P ? zero(T) : f[p+2]
-            h.go[i] = h.l[p] * f[p-2] - h.d[p] * f[p] + h.u[p] * fₚ₊₂
+    # Each parity depends only on its own RHS coefficients, so its solution
+    # can overwrite f before processing the other parity.
+    for (B, g, p₀) in ((h.Be, h.ge, 0), (h.Bo, h.go, 1))
+        M = length(g)
+        @inbounds @simd for i ∈ 2:M
+            p = p₀ + 2*(i-1)
+            fₚ₊₂ = p+2 ≤ P-2 ? f[p+2] : zero(T)
+            g[i] = h.l[p] * f[p-2] - h.d[p] * f[p] + h.u[p] * fₚ₊₂
         end
 
-        # solve two systems
-        ldiv!(h.Be, h.ge)
-        ldiv!(h.Bo, h.go)
+        ldiv!(B, g)
 
-        # copy solution back to input argument f
-        @simd for i ∈ 1:M
-            f[2i-2] = h.ge[i]
-            f[2i-1] = h.go[i]
+        @inbounds @simd for i ∈ 1:M
+            f[p₀ + 2*(i-1)] = g[i]
         end
     end
     return f

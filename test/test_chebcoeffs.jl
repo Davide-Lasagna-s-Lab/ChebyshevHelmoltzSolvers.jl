@@ -1,68 +1,63 @@
-using InteractiveUtils
-using Debugger
+@testset "Chebyshev coefficients" begin
+    data = [9.0, 8, 7, 6]
+    a = ChebCoeffs(data)
+    @test parent(a) === data
+    @test size(a) == (4,)
+    @test axes(a) == (0:3,)
+    @test axes(a, 1) == 0:3
+    @test axes(a, 2) == Base.OneTo(1)
+    @test firstindex(a) == 0
+    @test lastindex(a) == 3
+    @test collect(eachindex(a)) == collect(0:3)
+    @test a[0] == 9
+    @test a[3] == 6
+    a[0] = 5
+    @test data[1] == 5
+    @test_throws BoundsError a[-1]
+    @test_throws BoundsError a[4]
+    @test_throws BoundsError a[4] = 0
 
-@testset "general tests                          " begin
+    b = copy(a)
+    b[0] = -1
+    @test a[0] == 5
+    @test parent(b) !== parent(a)
+    c = similar(a)
+    @test axes(c) == axes(a)
+    @test eltype(c) == eltype(a)
+    c .= a
+    @test parent(c) == parent(a)
+    c .= 2 .* c .+ a
+    @test parent(c) == 3 .* parent(a)
+    wrapped = ChebCoeffs(parent(c))
+    c .= wrapped .+ 1
+    @test parent(c) == 3 .* parent(a) .+ 1
+    @test_throws ArgumentError ChebCoeffs(-1)
+    @test_throws ArgumentError ChebCoeffs(Float64[])
+    @test_throws ArgumentError ChebCoeffs(a)
+    storage = zeros(8)
+    viewcoeffs = ChebCoeffs(view(storage, 1:2:7))
+    viewcoeffs[2] = 3
+    @test storage[5] == 3
 
-    u = ChebCoeffs(3)
-    v = ChebCoeffs([9, 8, 7, 6])
-
-    @test length(u) == 4
-    
-    @test v[0] == 9
-    @test v[1] == 8
-    @test v[2] == 7
-    @test v[3] == 6
-
-    u[0] = 1; @test u[0] == 1
-    u[1] = 2; @test u[1] == 2
-    u[2] = 3; @test u[2] == 3
-    u[3] = 4; @test u[3] == 4
-
-    a = copy(u)
-    @test a[0] == 1
-    @test a[1] == 2
-    @test a[2] == 3
-    @test a[3] == 4
-
-    # find Chebychev series expansion of a function and check its derivative
-    P = 21
-    y = cos.(π*(0:P)/P)
-    f(y) = exp.(y)
-    f̂ = ChebCoeffs(FFTW.r2r(f.(y), FFTW.REDFT00)/P)
-    f̂[0] /= 2
-
-    @test HelmoltzSolvers._ddy(f̂, Val(:left)) ≈ exp(-1)
-    @test HelmoltzSolvers._ddy(f̂, Val(:right)) ≈ exp( 1)
-
-    # u .= 2.0 .* v
-    # @test u[0] == 18
-    # @test u[1] == 16
-    # @test u[2] == 14
-    # @test u[3] == 12
-
-    # u .= v
-    # @test u[0] == 9
-    # @test u[1] == 8
-    # @test u[2] == 7
-    # @test u[3] == 6
-
-    # B = [5 6 7 8; 9 0 1 2]
-    # w = ChebCoeffs(view(B, 1, :))
-    # println(w.data)
-    # u .= w
-    # println(u.data)
-    # @test u[0] == 5
-    # @test u[1] == 6
-    # @test u[2] == 7
-    # @test u[3] == 8
-
-    # w[0] = 1
-    # w[1] = 2
-    # w[2] = 3
-    # w[3] = 4
-    
-    # @test B[1, 1] == 1
-    # @test B[1, 2] == 2
-    # @test B[1, 3] == 3
-    # @test B[1, 4] == 4
+    for T in (Float32, Float64, ComplexF64), P in (0, 1, 2, 7, 8)
+        @testset "$T, degree $P" begin
+            amplitude = T <: Complex ? T(1 + 0.25im) : T(1)
+            a = ChebCoeffs(P, T)
+            a[P] = amplitude
+            original = copy(parent(a))
+            derivative = similar(a)
+            @test diff!(derivative, a) === derivative
+            @test parent(a) == original
+            @test derivative[P] == 0
+            for y in (-0.75, -0.2, 0.4, 0.8)
+                exact = P == 0 ? zero(T) : amplitude*P*sin(P*acos(y))/sqrt(1-y^2)
+                @test evaluate(derivative, y) ≈ exact atol=tolerance(T) rtol=tolerance(T)
+            end
+            @test endpoint_derivative(a, :right) ≈ amplitude*P^2
+            @test endpoint_derivative(a, :left) ≈ amplitude*(-1)^(P+1)*P^2
+            @test diff!(a, a) === a
+            @test parent(a) == parent(derivative)
+        end
+    end
+    @test_throws ArgumentError endpoint_derivative(a, :upper)
 end
