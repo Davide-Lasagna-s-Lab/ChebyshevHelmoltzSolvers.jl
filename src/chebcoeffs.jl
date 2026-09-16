@@ -1,4 +1,4 @@
-export ChebCoeffs, diff!, endpoint_derivative
+export ChebCoeffs, diff!, diff2!, endpoint_derivative, chebyshev_coefficients
 
 """
     ChebCoeffs(P, T=Float64)
@@ -67,19 +67,21 @@ Broadcast.broadcast_unalias(dest::ChebCoeffs, src::ChebCoeffs) =
     parent(dest) === parent(src) ? src : Broadcast.unalias(dest, src)
 
 """
+    diff!(a::ChebCoeffs)
     diff!(out::ChebCoeffs, a::ChebCoeffs)
 
-Write the ordinary Chebyshev coefficients of `da/dy` on `[-1, 1]` into
-`out`, and return `out`. Both expansions must have the same element type and
-degree `P`; the derivative's coefficient at degree `P` is zero.
+Differentiate ordinary Chebyshev coefficients on `[-1, 1]`. The one-argument
+method overwrites `a`. The two-argument method writes into `out`, preserves
+`a`, and requires non-aliasing storage. Both expansions must have the same
+element type and degree `P`; the derivative's coefficient at degree `P` is
+zero.
 
 Use the backward recurrence `b[n] = b[n+2] + 2*(n+1)*a[n+1]`, with a final
-factor of one half for `b[0]`. The operation takes `O(P)` work and constant
-extra storage. `out === a` is supported; otherwise their storage must not
-overlap. `a` is preserved when the storage is distinct.
+factor of one half for `b[0]`. Both methods take `O(P)` work and constant
+extra storage.
 """
-function diff!(out::ChebCoeffs{T, P},
-                 a::ChebCoeffs{T, P}) where {T, P}
+function _diff!(out::ChebCoeffs{T, P},
+                  a::ChebCoeffs{T, P}) where {T, P}
     dnext = dnext2 = zero(T)
     anext = zero(T)
     @inbounds for n = P:-1:0
@@ -91,6 +93,33 @@ function diff!(out::ChebCoeffs{T, P},
         dnext2, dnext = dnext, value
     end
     return out
+end
+
+diff!(a::ChebCoeffs) = _diff!(a, a)
+
+function diff!(out::ChebCoeffs{T, P},
+                 a::ChebCoeffs{T, P}) where {T, P}
+    Base.mightalias(parent(out), parent(a)) &&
+        throw(ArgumentError("input and output coefficients must not alias; use diff!(a) in place"))
+    return _diff!(out, a)
+end
+
+"""
+    diff2!(a::ChebCoeffs)
+    diff2!(out::ChebCoeffs, a::ChebCoeffs)
+
+Differentiate twice. The one-argument method overwrites `a`; the two-argument
+method preserves `a` and requires distinct storage.
+"""
+function diff2!(a::ChebCoeffs)
+    diff!(a)
+    return diff!(a)
+end
+
+function diff2!(out::ChebCoeffs{T, P},
+                  a::ChebCoeffs{T, P}) where {T, P}
+    diff!(out, a)
+    return diff!(out)
 end
 
 """
@@ -112,4 +141,28 @@ function endpoint_derivative(   a::ChebCoeffs{T, P},
         value += (side === :right || isodd(n) ? 1 : -1) * n^2 * a[n]
     end
     return value
+end
+
+#//////////////////////////////////////////////////////////////////////////////#
+#///                     CHEBYSHEV PROFILE COEFFICIENTS                     ///#
+#//////////////////////////////////////////////////////////////////////////////#
+
+"""
+    chebyshev_coefficients(values::AbstractVector)
+
+Return ordinary Chebyshev coefficients from values at the Lobatto points
+`y[j+1] = cospi(j/(N-1))`, ordered from +1 to -1. Require at least two
+values. Preserve the input and return a newly allocated `ChebCoeffs`, indexed
+by polynomial degree from zero.
+The DCT-I normalization matches the expansion used by `ChebCoeffs`, with
+no implicit factor of two on the constant coefficient.
+"""
+function chebyshev_coefficients(values::AbstractVector)
+    length(values) >= 2 ||
+        throw(ArgumentError("at least two Lobatto values are required"))
+    coefficients = FFTW.r2r(float.(values), FFTW.REDFT00)
+    coefficients ./= length(values) - 1
+    coefficients[1] /= 2
+    coefficients[end] /= 2
+    return ChebCoeffs(coefficients)
 end

@@ -66,7 +66,8 @@
             end
             @test endpoint_derivative(a, :right) ≈ amplitude*P^2
             @test endpoint_derivative(a, :left) ≈ amplitude*(-1)^(P+1)*P^2
-            @test diff!(a, a) === a
+            @test_throws ArgumentError diff!(a, a)
+            @test diff!(a) === a
             @test parent(a) == parent(derivative)
         end
     end

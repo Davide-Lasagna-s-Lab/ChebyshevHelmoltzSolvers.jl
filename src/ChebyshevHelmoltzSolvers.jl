@@ -9,6 +9,7 @@ boundary conditions.
 module ChebyshevHelmoltzSolvers
 
 using LinearAlgebra
+import FFTW
 
 include("chebcoeffs.jl")
 include("quasitridiag.jl")
