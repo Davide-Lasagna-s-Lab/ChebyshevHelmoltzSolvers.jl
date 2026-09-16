@@ -109,19 +109,26 @@ function solve!( h::HelmoltzSolver{T, P},
 
     # Each parity depends only on its own RHS coefficients, so its solution
     # can overwrite f before processing the other parity.
-    for (B, g, p₀) in ((h.Be, h.ge, 0), (h.Bo, h.go, 1))
-        M = length(g)
-        @inbounds @simd for i ∈ 2:M
-            p = p₀ + 2*(i-1)
-            fₚ₊₂ = p+2 ≤ P-2 ? f[p+2] : zero(T)
-            g[i] = h.l[p] * f[p-2] - h.d[p] * f[p] + h.u[p] * fₚ₊₂
-        end
+    _solve_parity!(h, f, h.Be, h.ge, 0)
+    _solve_parity!(h, f, h.Bo, h.go, 1)
+    return f
+end
 
-        ldiv!(B, g)
+# Separate calls specialize on each parity's matrix size. Iterating over a
+# heterogeneous tuple of even/odd factors otherwise boxes these hot solves.
+function _solve_parity!(h::HelmoltzSolver{T, P}, f::ChebCoeffs{T, P},
+                        B::QuasiTridiagonal, g::Vector{T}, p₀::Int) where {T, P}
+    M = length(g)
+    @inbounds @simd for i ∈ 2:M
+        p = p₀ + 2*(i-1)
+        fₚ₊₂ = p+2 ≤ P-2 ? f[p+2] : zero(T)
+        g[i] = h.l[p] * f[p-2] - h.d[p] * f[p] + h.u[p] * fₚ₊₂
+    end
 
-        @inbounds @simd for i ∈ 1:M
-            f[p₀ + 2*(i-1)] = g[i]
-        end
+    ldiv!(B, g)
+
+    @inbounds @simd for i ∈ 1:M
+        f[p₀ + 2*(i-1)] = g[i]
     end
     return f
 end

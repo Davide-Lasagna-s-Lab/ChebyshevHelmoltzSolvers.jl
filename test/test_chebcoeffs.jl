@@ -39,6 +39,17 @@
     viewcoeffs[2] = 3
     @test storage[5] == 3
 
+    # Modal solves already know the polynomial degree. The typed wrapper
+    # must infer a concrete return type and retain the original view, while
+    # rejecting storage that cannot represent that degree.
+    column = view(storage, 1:2:7)
+    typed = @inferred ChebCoeffs{Float64, 3}(column)
+    @test parent(typed) === column
+    @test typed[2] == storage[5]
+    @test_throws DimensionMismatch ChebCoeffs{Float64, 2}(column)
+    @test_throws ArgumentError ChebCoeffs{Float64, -1}(Float64[])
+    @test_throws ArgumentError ChebCoeffs{Float64, 3}(a)
+
     for T in (Float32, Float64, ComplexF64), P in (0, 1, 2, 7, 8)
         @testset "$T, degree $P" begin
             amplitude = T <: Complex ? T(1 + 0.25im) : T(1)
