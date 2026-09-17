@@ -1,10 +1,13 @@
 export HelmoltzSolver, solve!, update!
 
 """
-    HelmoltzSolver(P, T=Float64)
+    HelmoltzSolver(P, T=Float64; neumann=false)
 
 Cache the Chebyshev tau solve of `θ₀*u'' - θ₁*u = f` on `[-1, 1]`, with
-Dirichlet wall values. `P ≥ 2` is the polynomial degree, so each expansion
+Dirichlet wall values, or wall-normal derivatives when `neumann=true`.
+Neumann data are derivatives in the positive y direction at both walls,
+not outward-normal derivatives. The pure Neumann Poisson operator is singular
+and must be treated separately. `P ≥ 2` is the polynomial degree, so each expansion
 contains `P + 1` ordinary coefficients in `u(y) = sum(u[p]*T_p(y), p=0:P)`.
 Call `update!` before solving, and again whenever `θ₀` or `θ₁` changes.
 
@@ -16,6 +19,7 @@ concurrently. The scalar factorisation uses UL elimination without pivoting;
 the supplied operator must have nonzero pivots.
 """
 mutable struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, V<:Vector{T}}
+    neumann::Bool # prescribe derivatives instead of values at both walls
     Be::QE  # factorisation for even Chebyshev coefficients
     Bo::QO  # factorisation for odd Chebyshev coefficients
     ge::V   # even right-hand side and solution
@@ -24,7 +28,7 @@ mutable struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, 
      d::V   # diagonal coefficient, stored with the opposite RHS sign
      u::V   # upper coefficient of the integrated tau equations
 
-    function HelmoltzSolver(P::Int, ::Type{T}=Float64) where {T}
+    function HelmoltzSolver(P::Int, ::Type{T}=Float64; neumann::Bool=false) where {T}
         P ≥ 2 || throw(ArgumentError("P must be at least 2: got $P"))
 
         # Include coefficient zero in the even block. With even P this
@@ -49,7 +53,7 @@ mutable struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, 
             u[p] = _β(p+2, P)/(4*p*(p+1))
         end
 
-        return new{T, P, typeof(Be), typeof(Bo), Vector{T}}(Be, Bo, ge, go, l, d, u)
+        return new{T, P, typeof(Be), typeof(Bo), Vector{T}}(neumann, Be, Bo, ge, go, l, d, u)
     end
 end
 
@@ -59,7 +63,7 @@ end
 Assemble and UL-factorise the even and odd systems for `θ₀*u'' - θ₁*u = f`.
 For a physical interval `[a, b]`, use `θ₀ = ν*(2/(b-a))^2` and `θ₁ = λ`
 to represent Gibson's operator `ν*d²/dy² - λ`. The right-hand side and wall
-values are not rescaled.
+values or derivatives are not rescaled.
 
 Reassemble all matrix entries before factorisation, replacing any previous
 factors. Subsequent solves reuse these factors until the next update.
@@ -68,12 +72,17 @@ Return `nothing`.
 function update!( h::HelmoltzSolver{T, P},
                  θ₀::Real,
                  θ₁::Real) where {T, P}
-    # Row one imposes the sum of the even or odd coefficients. The
+    h.neumann && iszero(θ₁) &&
+        throw(ArgumentError("the pure Neumann Poisson operator requires a separate mean-mode solve"))
+    # Row one imposes the wall value or derivative for each parity. The
     # remaining rows contain the integrated equations for p = 2, 4, ...
     # or p = 3, 5, ..., respectively.
     for (B, p₀) in ((h.Be, 2), (h.Bo, 3))
         M = size(B, 1)
-        B.b .= 1
+        for i ∈ 1:M
+            n = p₀ - 2 + 2*(i-1)
+            B.b[i] = h.neumann ? n^2 : 1
+        end
         @simd for i ∈ 1:M-1
             p = p₀ + 2*(i-1)
             B.l[i] =     -θ₁*h.l[p]
@@ -90,7 +99,8 @@ end
     solve!(h::HelmoltzSolver, f::ChebCoeffs, u₊, u₋)
 
 Overwrite the Chebyshev coefficients `f` with the solution, using the factors
-from `update!`. Boundary arguments are `u(+1)` then `u(-1)`; Channelflow's
+from `update!`. Boundary arguments are `u(+1)` then `u(-1)` (or `u′(+1)` then
+`u′(-1)` with `neumann=true`); Channelflow's
 `solve(u, f, ua, ub)` uses the reverse order. The two highest residual
 coefficients are tau terms, so the equation is imposed only through degree
 `P - 2`.
@@ -104,8 +114,9 @@ function solve!( h::HelmoltzSolver{T, P},
                  f::ChebCoeffs{T, P},
                 u₊::Real,
                 u₋::Real) where {T, P}
-    h.ge[1] = (u₊+u₋)*0.5
-    h.go[1] = (u₊-u₋)*0.5
+    # Differentiation swaps parity: even polynomials have odd derivatives.
+    h.ge[1] = (h.neumann ? u₊-u₋ : u₊+u₋)*0.5
+    h.go[1] = (h.neumann ? u₊+u₋ : u₊-u₋)*0.5
 
     # Each parity depends only on its own RHS coefficients, so its solution
     # can overwrite f before processing the other parity.
