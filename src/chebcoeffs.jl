@@ -111,16 +111,9 @@ end
 Differentiate twice. The one-argument method overwrites `a`; the two-argument
 method preserves `a` and requires distinct storage.
 """
-function diff2!(a::ChebCoeffs)
-    diff!(a)
-    return diff!(a)
-end
+diff2!(a::ChebCoeffs) = diff!(diff!(a))
 
-function diff2!(out::ChebCoeffs{T, P},
-                  a::ChebCoeffs{T, P}) where {T, P}
-    diff!(out, a)
-    return diff!(out)
-end
+diff2!(out::ChebCoeffs{T, P}, a::ChebCoeffs{T, P}) where {T, P} = diff!(diff!(out, a))
 
 """
     endpoint_derivative(a::ChebCoeffs, side::Symbol)
