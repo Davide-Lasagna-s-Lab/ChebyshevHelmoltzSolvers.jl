@@ -48,8 +48,10 @@ update!(h, 1.0, 4.0)
 
 # Sample the right-hand side at Lobatto points, ordered from +1 to -1.
 y = [cospi(j/P) for j = 0:P]
-rhs = chebyshev_coefficients(-6 .+ 4 .* y.^2)
+rhs = chebcoeffs(-6 .+ 4 .* y.^2)
 solve!(h, rhs, 0.0, 0.0)  # overwrites rhs with the solution coefficients
+
+u = chebvalues(rhs)  # u ≈ 1 .- y.^2
 
 # u = (T₀ - T₂)/2: rhs[0] ≈ 0.5, rhs[2] ≈ -0.5
 ```
@@ -81,8 +83,10 @@ solver = CoupledHelmoltzSolver(P)
 update!(solver, (1.0, 0.0, 1.0, 0.0))
 
 y = [cospi(j/P) for j = 0:P]
-rhs = chebyshev_coefficients(fill(24.0, length(y)))
+rhs = chebcoeffs(fill(24.0, length(y)))
 solve!(solver, rhs)
+
+v = chebvalues(rhs)  # v ≈ (1 .- y.^2).^2
 
 # v = 3T₀/8 - T₂/2 + T₄/8
 # rhs[0] ≈ 0.375, rhs[2] ≈ -0.5, rhs[4] ≈ 0.125
@@ -106,13 +110,14 @@ vector. `ChebCoeffs(P, T)` allocates zeros, whereas `ChebCoeffs(vector)` wraps
 existing storage without copying. Both odd and even polynomial degrees are
 supported.
 
-Use `chebyshev_coefficients(values)` to convert samples at descending Lobatto
+Use `chebcoeffs(values)` to convert samples at descending Lobatto
 points `cospi(j/P)` into a `ChebCoeffs`. This uses FFTW's DCT-I, divides the
 transform by `P`, and halves coefficients `0` and `P`. The input is preserved.
 
 | Operation | Purpose |
 | --- | --- |
-| `chebyshev_coefficients(values)` | Convert descending Lobatto samples into ordinary Chebyshev coefficients. |
+| `chebcoeffs(values)` | Convert descending Lobatto samples into ordinary Chebyshev coefficients. |
+| `chebvalues(a)` | Evaluate coefficients at descending Lobatto points. |
 | `diff!(a)` | Differentiate Chebyshev coefficients in place on [-1, 1]. |
 | `diff!(out, a)` | Differentiate into distinct, non-aliasing output storage. |
 | `endpoint_derivative(a, :left)` | Evaluate the derivative at -1 without a derivative workspace. |

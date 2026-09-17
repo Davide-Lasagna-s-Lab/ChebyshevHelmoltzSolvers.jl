@@ -1,4 +1,4 @@
-export ChebCoeffs, diff!, diff2!, endpoint_derivative, chebyshev_coefficients
+export ChebCoeffs, diff!, diff2!, endpoint_derivative
 
 """
     ChebCoeffs(P, T=Float64)
@@ -134,28 +134,4 @@ function endpoint_derivative(   a::ChebCoeffs{T, P},
         value += (side === :right || isodd(n) ? 1 : -1) * n^2 * a[n]
     end
     return value
-end
-
-#//////////////////////////////////////////////////////////////////////////////#
-#///                     CHEBYSHEV PROFILE COEFFICIENTS                     ///#
-#//////////////////////////////////////////////////////////////////////////////#
-
-"""
-    chebyshev_coefficients(values::AbstractVector)
-
-Return ordinary Chebyshev coefficients from values at the Lobatto points
-`y[j+1] = cospi(j/(N-1))`, ordered from +1 to -1. Require at least two
-values. Preserve the input and return a newly allocated `ChebCoeffs`, indexed
-by polynomial degree from zero.
-The DCT-I normalization matches the expansion used by `ChebCoeffs`, with
-no implicit factor of two on the constant coefficient.
-"""
-function chebyshev_coefficients(values::AbstractVector)
-    length(values) >= 2 ||
-        throw(ArgumentError("at least two Lobatto values are required"))
-    coefficients = FFTW.r2r(float.(values), FFTW.REDFT00)
-    coefficients ./= length(values) - 1
-    coefficients[1] /= 2
-    coefficients[end] /= 2
-    return ChebCoeffs(coefficients)
 end

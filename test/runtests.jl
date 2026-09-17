@@ -3,7 +3,7 @@ using LinearAlgebra
 using Test
 
 # Independent cosine interpolation/evaluation for the analytic test problems.
-# No FFT, plotting, debugger or benchmark packages are needed by the suite.
+# The analytic reference below does not use the FFT-based transforms.
 function coefficients(f, P, ::Type{T}=Float64) where {T}
     P == 0 && return ChebCoeffs(T[f(1.0)])
     values = [f(cospi(j/P)) for j = 0:P]
@@ -23,6 +23,7 @@ tolerance(::Type{T}) where {T} = real(zero(T)) isa Float32 ? 2e-4 : 2e-11
 
 @testset "ChebyshevHelmoltzSolvers" begin
     include("test_chebcoeffs.jl")
+    include("test_transforms.jl")
     include("test_quasitridiag.jl")
     include("test_helmoltz.jl")
     include("test_coupled.jl")
