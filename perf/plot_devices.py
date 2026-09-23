@@ -1,10 +1,17 @@
 """Plot saved device benchmarks without rerunning the solver."""
 from pathlib import Path
+from math import isqrt
 import csv
 import sys
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+def batch_label(b):
+    """Show square batch sizes as side counts, retaining arbitrary-size support."""
+    n = isqrt(b)
+    return rf"${n}^2$ systems" if n*n == b else f"{b:,} systems"
+
 
 source = Path(sys.argv[1])
 rows = list(csv.DictReader(source.open()))
@@ -24,12 +31,12 @@ if not any(float(r['gpu_solve_seconds']) > 0 for r in rows):
                     continue
                 x = [int(r['Ny']) for r in data]
                 ax.plot(x, [float(r[f'cpu_{operation}_seconds'])*1e6/b for r in data],
-                        color=color, marker=marker, ms=4, label=f'{b:,}')
+                        color=color, marker=marker, ms=4, label=batch_label(b))
             ax.set(yscale='log', xlabel=r'Coefficient count $N_y$', title=kind.capitalize())
             ax.set_xscale('log', base=2)
             ax.grid(alpha=.2)
         axes[0].set_ylabel(f'Minimum {operation} time (µs/system)')
-        axes[1].legend(title='Systems', frameon=False, fontsize=8)
+        axes[1].legend(frameon=False, fontsize=8)
         fig.savefig(source.with_name(source.stem+f'-{operation}.png'))
         plt.close(fig)
 
@@ -44,7 +51,7 @@ if any(float(r['gpu_solve_seconds']) > 0 for r in rows):
                 x = [int(r['Ny']) for r in data]
                 axes[0].plot(x, [float(r[f"cpu_{operation}_seconds"])*1e6/b for r in data], color=color, ls='--', marker=marker, ms=3, mfc='none')
                 axes[0].plot(x, [float(r[f"gpu_{operation}_seconds"])*1e6/b for r in data], color=color, marker=marker, ms=3)
-                axes[1].plot(x, [float(r[f"{operation}_speedup"]) for r in data], color=color, marker=marker, ms=4, label=f'{b:,}')
+                axes[1].plot(x, [float(r[f"{operation}_speedup"]) for r in data], color=color, marker=marker, ms=4, label=batch_label(b))
             for ax in axes:
                 ax.set_xscale('log', base=2)
                 ax.set_xlabel(r'Coefficient count $N_y$')
@@ -53,7 +60,7 @@ if any(float(r['gpu_solve_seconds']) > 0 for r in rows):
             axes[1].set_ylabel('Speedup: batched CPU / A100')
             axes[1].set_yscale('log')
             axes[1].axhline(1, color='grey', ls='--', lw=.8)
-            axes[1].legend(title='Systems', frameon=False, fontsize=8,
+            axes[1].legend(frameon=False, fontsize=8,
                            loc='upper left', bbox_to_anchor=(1.02, 1))
             fig.suptitle(kind.capitalize()+f' {operation} · ComplexF64 · {samples} samples')
             fig.savefig(source.with_name(source.stem+f'-{kind}-{operation}.png'))
