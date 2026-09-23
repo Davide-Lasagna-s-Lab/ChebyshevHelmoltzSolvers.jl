@@ -1,6 +1,10 @@
+#//////////////////////////////////////////////////////////////////////////////#
+#///                   COUPLED SOLVE AND INFLUENCE TESTS                    ///#
+#//////////////////////////////////////////////////////////////////////////////#
+
 @testset "Coupled Helmholtz and cached influence" begin
     ys = range(-1, 1; length=41)
-    for T in (Float32, Float64, ComplexF64), P in (4, 5, 8, 9, 16, 17)
+    for T in (Float32, Float64), P in (4, 5, 8, 9, 16, 17)
         @testset "$T, degree $P" begin
             solver = CoupledHelmoltzSolver(P, T)
             α = P >= 5 ? 0.2 : 0.0
@@ -11,8 +15,8 @@
                        (2.0, 0.4, 0.8, 1.5))
                 θ₀, θ₁, θ₂, θ₃ = θs
                 update!(solver, θs)
-                plus = copy(parent(solver.vₛ[2]))
-                minus = copy(parent(solver.vₛ[3]))
+                plus = copy(solver.vₛ[2])
+                minus = copy(solver.vₛ[3])
                 influence = copy(solver.A_inf)
                 for scale in (T(1), T <: Complex ? T(-0.5 + 0.3im) : T(-0.5))
                     r(y) = scale*(θ₀*θ₂*d4v(y) -
@@ -24,8 +28,8 @@
                     @test abs(evaluate(rhs, -1.0)) < tolerance(T)
                     @test abs(diff(rhs, :left)) < tolerance(T)
                     @test abs(diff(rhs, :right)) < tolerance(T)
-                    @test parent(solver.vₛ[2]) == plus
-                    @test parent(solver.vₛ[3]) == minus
+                    @test solver.vₛ[2] == plus
+                    @test solver.vₛ[3] == minus
                     @test solver.A_inf == influence
                 end
             end

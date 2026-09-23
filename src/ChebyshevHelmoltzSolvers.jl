@@ -8,14 +8,24 @@ boundary conditions.
 """
 module ChebyshevHelmoltzSolvers
 
+#//////////////////////////////////////////////////////////////////////////////#
+#///                              DEPENDENCIES                              ///#
+#//////////////////////////////////////////////////////////////////////////////#
+
 using LinearAlgebra
 import FFTW
+import Adapt
 
-include("chebcoeffs.jl")
+#//////////////////////////////////////////////////////////////////////////////#
+#///                           PACKAGE COMPONENTS                           ///#
+#//////////////////////////////////////////////////////////////////////////////#
+
 include("differentiation.jl")
 include("transforms.jl")
 include("quasitridiag.jl")
+include("batched/quasitridiag.jl")
 include("helmoltz.jl")
+include("batched/helmoltz.jl")
 include("coupled.jl")
 
 end
