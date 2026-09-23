@@ -64,12 +64,12 @@
                 exact = P == 0 ? zero(T) : amplitude*P*sin(P*acos(y))/sqrt(1-y^2)
                 @test evaluate(derivative, y) ≈ exact atol=tolerance(T) rtol=tolerance(T)
             end
-            @test endpoint_derivative(a, :right) ≈ amplitude*P^2
-            @test endpoint_derivative(a, :left) ≈ amplitude*(-1)^(P+1)*P^2
+            @test diff(a, :right) ≈ amplitude*P^2
+            @test diff(a, :left) ≈ amplitude*(-1)^(P+1)*P^2
             @test_throws ArgumentError diff!(a, a)
             @test diff!(a) === a
             @test parent(a) == parent(derivative)
         end
     end
-    @test_throws ArgumentError endpoint_derivative(a, :upper)
+    @test_throws ArgumentError diff(a, :upper)
 end

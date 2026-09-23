@@ -22,8 +22,8 @@
                     @test maximum(abs(evaluate(rhs, y)-scale*v(y)) for y in ys) < tolerance(T)
                     @test abs(evaluate(rhs, 1.0)) < tolerance(T)
                     @test abs(evaluate(rhs, -1.0)) < tolerance(T)
-                    @test abs(endpoint_derivative(rhs, :left)) < tolerance(T)
-                    @test abs(endpoint_derivative(rhs, :right)) < tolerance(T)
+                    @test abs(diff(rhs, :left)) < tolerance(T)
+                    @test abs(diff(rhs, :right)) < tolerance(T)
                     @test parent(solver.vₛ[2]) == plus
                     @test parent(solver.vₛ[3]) == minus
                     @test solver.A_inf == influence

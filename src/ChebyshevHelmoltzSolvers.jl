@@ -12,6 +12,7 @@ using LinearAlgebra
 import FFTW
 
 include("chebcoeffs.jl")
+include("differentiation.jl")
 include("transforms.jl")
 include("quasitridiag.jl")
 include("helmoltz.jl")

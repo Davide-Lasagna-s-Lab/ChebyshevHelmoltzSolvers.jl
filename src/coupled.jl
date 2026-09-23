@@ -62,10 +62,10 @@ function update!(solver::CoupledHelmoltzSolver,
     solve!(solver.hv, v₋, 0, 0)
 
     # Rows select the upper/lower wall; columns select the two responses.
-    solver.A_inf[1, 1] = endpoint_derivative(v₊, :right)
-    solver.A_inf[2, 1] = endpoint_derivative(v₊, :left)
-    solver.A_inf[1, 2] = endpoint_derivative(v₋, :right)
-    solver.A_inf[2, 2] = endpoint_derivative(v₋, :left)
+    solver.A_inf[1, 1] = diff(v₊, :right)
+    solver.A_inf[2, 1] = diff(v₊, :left)
+    solver.A_inf[1, 2] = diff(v₋, :right)
+    solver.A_inf[2, 2] = diff(v₋, :left)
     return nothing
 end
 
@@ -97,8 +97,8 @@ function solve!(solver::CoupledHelmoltzSolver{T, P},
     solve!(solver.hv, vₚ, 0, 0)
 
     # Cancel the particular solution's wall derivatives using the cached matrix.
-    b = SVector{2}(-endpoint_derivative(vₚ, :right),
-                   -endpoint_derivative(vₚ, :left))
+    b = SVector{2}(-diff(vₚ, :right),
+                   -diff(vₚ, :left))
     δ₊, δ₋ = SMatrix(solver.A_inf)\b
 
     parent(r) .= parent(vₚ) .+ δ₊ .* parent(v₊) .+ δ₋ .* parent(v₋)

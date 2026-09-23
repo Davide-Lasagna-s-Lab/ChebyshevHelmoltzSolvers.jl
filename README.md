@@ -120,8 +120,8 @@ transform by `P`, and halves coefficients `0` and `P`. The input is preserved.
 | `chebvalues(a)` | Evaluate coefficients at descending Lobatto points. |
 | `diff!(a)` | Differentiate Chebyshev coefficients in place on [-1, 1]. |
 | `diff!(out, a)` | Differentiate into distinct, non-aliasing output storage. |
-| `endpoint_derivative(a, :left)` | Evaluate the derivative at -1 without a derivative workspace. |
-| `endpoint_derivative(a, :right)` | Evaluate the derivative at +1. |
+| `diff(a, :left)` | Evaluate the derivative at -1 without a derivative workspace. |
+| `diff(a, :right)` | Evaluate the derivative at +1. |
 | `QuasiTridiagonal(M, T)` | Allocate a matrix with a dense first row and tridiagonal interior. |
 | `ul!(Q)` | Factorise that matrix in place without pivoting. |
 | `ldiv!(Q, rhs)` | Solve using existing UL factors; available through `LinearAlgebra`. |
