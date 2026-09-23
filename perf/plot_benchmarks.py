@@ -63,3 +63,7 @@ fig.suptitle("Operator updates include assembly, factorisation and validation")
 for suffix in ("png", "svg"):
     fig.savefig(root / f"results/helmoltz-updates.{suffix}")
 plt.close(fig)
+
+# Keep Matplotlib's generated SVG path data free of trailing whitespace.
+for path in (root / "results").glob("helmoltz-*.svg"):
+    path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
