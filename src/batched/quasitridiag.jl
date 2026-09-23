@@ -1,3 +1,5 @@
+_host_storage(::AbstractArray) = true
+
 export BatchedQuasiTridiagonal
 
 #//////////////////////////////////////////////////////////////////////////////#
@@ -139,6 +141,9 @@ factors. Real factors of type `T` support `T` or `Complex{T}` right-hand sides.
 function LinearAlgebra.ldiv!(Q::BatchedQuasiTridiagonal{T, B, M, Matrix{T}},
                              rhs::StridedMatrix{S}) where {T, B, M, S<:Union{T, Complex{T}}}
     #///////////////////////////////// CHECKS /////////////////////////////////#
+    # CUDA arrays may satisfy Julia's StridedMatrix alias, but CPU loops
+    # must reject them before scalar indexing can access device memory.
+    _host_storage(rhs) || throw(ArgumentError("CPU factors require CPU storage"))
     # Shape and stride establish valid, contiguous accesses across systems.
     Base.require_one_based_indexing(rhs)
     size(rhs) == size(Q.b) || throw(DimensionMismatch("RHS must have size $(size(Q.b))"))

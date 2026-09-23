@@ -79,7 +79,7 @@ test_batched_helmholtz(to_gpu; backend="CUDA")
             @test result[:, 1:2:end] ≈ exact atol=tol rtol=tol
             @test all(==(S(123)), result[:, 2:2:end])
             @test map(Array, (gpu.b, gpu.l, gpu.dᵢ, gpu.u)) == saved
-            @test_throws ArgumentError ldiv!(gpu, rhs)
+            @test_throws MethodError ldiv!(gpu, rhs)
             @test_throws ArgumentError ldiv!(cpu, to_gpu(rhs))
         end
         # B=257 reaches beyond one full CUDA block.
@@ -130,4 +130,8 @@ end
 end
 
 # Surface errors from asynchronous launches before declaring validation done.
+CUDA.synchronize()
+
+include(joinpath(@__DIR__, "..", "batched", "coupled.jl"))
+test_batched_coupled(to_gpu; backend="CUDA")
 CUDA.synchronize()

@@ -27,5 +27,6 @@ include("batched/quasitridiag.jl")
 include("helmoltz.jl")
 include("batched/helmoltz.jl")
 include("coupled.jl")
+include("batched/coupled.jl")
 
 end

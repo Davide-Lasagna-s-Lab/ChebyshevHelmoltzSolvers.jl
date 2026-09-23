@@ -29,6 +29,7 @@ include("helpers.jl")
         include("test_helmoltz.jl")
         include("batched/helmoltz.jl")
         include("test_coupled.jl")
+        include("batched/coupled.jl")
         include("test_poisson.jl")
     end
     @testset "Contracts and numerical accuracy" begin

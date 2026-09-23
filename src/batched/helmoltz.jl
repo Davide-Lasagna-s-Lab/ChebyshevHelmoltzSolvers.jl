@@ -95,7 +95,8 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
                  θ₁::AbstractVector{T}) where {T, B, M, Q<:BatchedQuasiTridiagonal{T, B, M, Matrix{T}}}
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # CPU factors require host-accessible coefficient vectors.
-    θ₀ isa Union{StridedVector, AbstractRange} && θ₁ isa Union{StridedVector, AbstractRange} ||
+    θ₀ isa Union{StridedVector, AbstractRange} && θ₁ isa Union{StridedVector, AbstractRange} &&
+        _host_storage(θ₀) && _host_storage(θ₁) ||
         throw(ArgumentError("CPU factors require CPU coefficient vectors"))
     # Coefficients must enumerate this fixed-size batch without offset indices.
     Base.require_one_based_indexing(θ₀, θ₁)
@@ -210,7 +211,7 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
     # Reject precision mismatches before assembling any output coefficients.
     _check_precision(T, u, f)
     # CPU factors require host fields with strided storage.
-    u isa StridedMatrix && f isa StridedMatrix ||
+    u isa StridedMatrix && f isa StridedMatrix && _host_storage(u) && _host_storage(f) ||
         throw(ArgumentError("CPU factors require strided CPU input and output matrices"))
     # Each row is a system and each column is a Chebyshev coefficient.
     Base.require_one_based_indexing(u, f)
@@ -234,7 +235,8 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
 
     # Only u is overwritten. Protect the forcing, factors and cache.
     Base.mightalias(u, f) && throw(ArgumentError("source and destination must not alias"))
-    for factors in (h.Be, h.Bo), a in (factors.b, factors.l, factors.dᵢ, factors.u)
+    for a in (h.Be.b, h.Be.l, h.Be.dᵢ, h.Be.u,
+              h.Bo.b, h.Bo.l, h.Bo.dᵢ, h.Bo.u)
         Base.mightalias(u, a) && throw(ArgumentError("destination must not alias the factors"))
     end
     any(a -> Base.mightalias(u, a), h.cache) &&

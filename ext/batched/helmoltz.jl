@@ -96,7 +96,8 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
                 u₋::AbstractVector) where {T, B, Q<:CuBatchedQuasiTridiagonal{T, B}}
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # Singular CPU batches cannot yet be solved on device.
-    all(iszero, h.poisson) || throw(ArgumentError("singular Neumann Poisson is currently CPU-only"))
+    h.neum && !all(iszero, h.poisson) &&
+        throw(ArgumentError("singular Neumann Poisson is currently CPU-only"))
     # Reject precision mismatches before launching a kernel.
     _check_precision(T, u, f)
     # CUDA factors require device input and output fields.
@@ -124,7 +125,8 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
 
     # Only u is overwritten. Protect the forcing, factors and cache.
     Base.mightalias(u, f) && throw(ArgumentError("source and destination must not alias"))
-    for factors in (h.Be, h.Bo), a in (factors.b, factors.l, factors.dᵢ, factors.u)
+    for a in (h.Be.b, h.Be.l, h.Be.dᵢ, h.Be.u,
+              h.Bo.b, h.Bo.l, h.Bo.dᵢ, h.Bo.u)
         Base.mightalias(u, a) && throw(ArgumentError("destination must not alias the factors"))
     end
     any(a -> Base.mightalias(u, a), h.cache) &&
