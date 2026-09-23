@@ -17,7 +17,7 @@
                 update!(solver, θs)
                 plus = copy(solver.vₛ[2])
                 minus = copy(solver.vₛ[3])
-                influence = copy(solver.A_inf)
+                influence = copy(solver.A)
                 for scale in (T(1), T <: Complex ? T(-0.5 + 0.3im) : T(-0.5))
                     r(y) = scale*(θ₀*θ₂*d4v(y) -
                                    (θ₀*θ₃+θ₁*θ₂)*d2v(y) + θ₁*θ₃*v(y))
@@ -30,7 +30,7 @@
                     @test abs(diff(rhs, :right)) < tolerance(T)
                     @test solver.vₛ[2] == plus
                     @test solver.vₛ[3] == minus
-                    @test solver.A_inf == influence
+                    @test solver.A == influence
                 end
             end
         end

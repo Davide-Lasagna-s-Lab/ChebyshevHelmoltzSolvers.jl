@@ -41,4 +41,5 @@ tolerance(::Type{T}) where {T} = real(zero(T)) isa Float32 ? 2e-4 : 2e-11
     include("batched/helmoltz.jl")
     include("test_helmoltz.jl")
     include("test_coupled.jl")
+    include("test_domains.jl")
 end

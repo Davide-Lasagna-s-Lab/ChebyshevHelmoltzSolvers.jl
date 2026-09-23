@@ -5,10 +5,11 @@ export BatchedHelmoltzSolver
 #//////////////////////////////////////////////////////////////////////////////#
 
 """
-    BatchedHelmoltzSolver(P, B, T=Float64; neum=false)
+    BatchedHelmoltzSolver(P, B, T=Float64; neum=false, a=-1, b=1)
 
 Allocate storage for `B` independent problems `θ₀[s]*uₛ'' - θ₁[s]*uₛ = fₛ`
-on `[-1, 1]`, using precision `T`. `P ≥ 3` is the polynomial degree, so
+on `[a, b]`, using precision `T`. All systems share this interval; operator
+coefficients and Neumann data refer to physical derivatives. `P ≥ 3` is the polynomial degree, so
 there are `P + 1` coefficients per solution. The positive batch size `B` is
 stored as a type parameter; factors use `(system, coefficient)` storage.
 
@@ -26,6 +27,7 @@ transfers its factors without changing precision. Updates subsequently
 assemble and factor in the existing CPU or GPU arrays.
 """
 struct BatchedHelmoltzSolver{T, B, Q<:BatchedQuasiTridiagonal{T, B}, R<:BatchedQuasiTridiagonal{T, B}, V<:AbstractVector{T}}
+    scale::T            # physical derivative scale 2/(b-a), shared by the batch
      neum::Bool         # prescribe positive-y derivatives instead of wall values
        Be::Q            # UL factors for the even Chebyshev coefficients, system first
        Bo::R            # UL factors for the odd Chebyshev coefficients, system first
@@ -35,11 +37,13 @@ end
 function BatchedHelmoltzSolver(   P::Int,
                                   B::Int,
                                    ::Type{T}=Float64;
-                               neum::Bool=false) where {T<:AbstractFloat}
+                               neum::Bool=false, a=-1, b=1) where {T<:AbstractFloat}
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # Both parity blocks must contain at least two coefficients.
     P ≥ 3 || throw(ArgumentError("P must be at least 3"))
     #//////////////////////////////////////////////////////////////////////////#
+
+    scale = _intervalscale(a, b, T)
 
     # Allocate B independent factor banks for each parity. Even degrees
     # include zero, giving one extra coefficient when P is even. update!
@@ -54,7 +58,7 @@ function BatchedHelmoltzSolver(   P::Int,
     u = T[p == 1 ? 0 : _β(p+2, P)/(4p*(p+1)) for p in 1:P]
     cache = (l, d, u)
 
-    return BatchedHelmoltzSolver(neum, Be, Bo, cache)
+    return BatchedHelmoltzSolver(scale, neum, Be, Bo, cache)
 end
 
 #//////////////////////////////////////////////////////////////////////////////#
@@ -63,7 +67,7 @@ end
 
 # Transfer factor banks and cached integration weights to the same device.
 function Adapt.adapt_structure(to, h::BatchedHelmoltzSolver)
-    return BatchedHelmoltzSolver(h.neum,
+    return BatchedHelmoltzSolver(h.scale, h.neum,
                                 Adapt.adapt(to, h.Be),
                                 Adapt.adapt(to, h.Bo),
                                 Adapt.adapt(to, h.cache))
@@ -117,8 +121,8 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
 
     # Assemble and factor each parity across contiguous systems. No scalar
     # wrappers or row views are constructed for individual operators.
-    _assemble_helmoltz!(h.Be, h.cache, θ₀, θ₁, 2, h.neum); ul!(h.Be)
-    _assemble_helmoltz!(h.Bo, h.cache, θ₀, θ₁, 3, h.neum); ul!(h.Bo)
+    _assemble_helmoltz!(h.Be, h.cache, θ₀, θ₁, 2, h.neum, h.scale); ul!(h.Be)
+    _assemble_helmoltz!(h.Bo, h.cache, θ₀, θ₁, 3, h.neum, h.scale); ul!(h.Bo)
 
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # UL is unpivoted: validate the new factors after every update before
@@ -144,11 +148,11 @@ end
 # Assemble the same entries as the scalar method, with systems in the
 # inner loop so each pass writes contiguous memory and can use SIMD.
 function _assemble_helmoltz!(Q::BatchedQuasiTridiagonal{T, B, M, Matrix{T}},
-                            cache, θ₀, θ₁, p₀, neum) where {T, B, M}
+                            cache, θ₀, θ₁, p₀, neum, scale) where {T, B, M}
     l, d, u = cache
     @inbounds for i in 1:M
         n = p₀ - 2 + 2*(i-1)
-        boundary = neum ? n^2 : 1
+        boundary = neum ? scale*n^2 : 1
         @simd for s in 1:B
             Q.b[s, i] = boundary
         end
@@ -157,7 +161,7 @@ function _assemble_helmoltz!(Q::BatchedQuasiTridiagonal{T, B, M, Matrix{T}},
         p = p₀ + 2*(i-1)
         @simd for s in 1:B
             Q.l[s, i] = -θ₁[s]*l[p]
-            Q.dᵢ[s, i] = θ₀[s] + θ₁[s]*d[p]
+            Q.dᵢ[s, i] = θ₀[s]*scale^2 + θ₁[s]*d[p]
         end
         if i < M-1
             @simd for s in 1:B
@@ -182,7 +186,7 @@ fields at the call site. Real factors support real or complex data of matching
 precision.
 
 `u₊` and `u₋` are one-based vectors of length `B`. Entry `s` prescribes
-system `s`'s values at `+1` and `-1`, or positive-y derivatives when
+system `s`'s values at `b` and `a`, or positive-y derivatives when
 `neum=true`. They must not alias `u`. A custom constant-valued vector may
 supply homogeneous conditions without allocating boundary storage. Vectors
 must support indexing on the selected backend; for CUDA, any stored data

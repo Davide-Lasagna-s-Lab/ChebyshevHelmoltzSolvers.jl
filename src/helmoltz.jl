@@ -13,12 +13,12 @@ _β(p, P) = p > P-2 ? 0 : 1
 #//////////////////////////////////////////////////////////////////////////////#
 
 """
-    HelmoltzSolver(P, T=Float64; neum=false)
+    HelmoltzSolver(P, T=Float64; neum=false, a=-1, b=1)
 
 Construct a degree-`P` Chebyshev tau solver for
 
 ```math
-θ₀ u''(y) - θ₁ u(y) = f(y), \\qquad -1 ≤ y ≤ 1.
+θ₀ u''(y) - θ₁ u(y) = f(y), \\qquad a ≤ y ≤ b.
 ```
 
 Use Dirichlet wall values by default, or prescribe `u′` at both walls with
@@ -29,8 +29,13 @@ and again whenever `θ₀` or `θ₁` changes.
 
 # Numerical method
 
+Set `ξ = (2y-a-b)/(b-a)` and `scale = 2/(b-a)`. Operator coefficients
+and Neumann data use physical derivatives. The reference-coordinate
+formulas below use `θ₀*scale²` in place of `θ₀` and multiply Neumann
+boundary rows by `scale`.
+
 Represent the solution and forcing by ordinary Chebyshev expansions,
-`u(y) = sum(u[p+1]*T_p(y), p=0:P)`, with no half-weight on the zeroth coefficient.
+`u(y) = sum(u[p+1]*T_p(ξ), p=0:P)`, with no half-weight on the zeroth coefficient.
 The tau formulation sets the residual coefficients of degrees `0:P-2` to
 zero. The last two differential-equation conditions are replaced by the two
 wall conditions; residuals in degrees `P-1` and `P` are not constrained.
@@ -83,6 +88,7 @@ Concurrent solves may share the factors with disjoint destination storage,
 provided no concurrent `update!` modifies the solver.
 """
 struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, V<:Vector{T}}
+    scale::T    # d/dy = scale*d/dξ for the affine reference coordinate
      neum::Bool # prescribe derivatives instead of values at both walls
        Be::QE   # factorisation for even Chebyshev coefficients
        Bo::QO   # factorisation for odd Chebyshev coefficients
@@ -90,11 +96,13 @@ struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, V<:Vecto
 
     function HelmoltzSolver(   P::Int,
                                 ::Type{T}=Float64;
-                            neum::Bool=false) where {T}
+                            neum::Bool=false, a=-1, b=1) where {T}
         #/////////////////////////////// CHECKS ///////////////////////////////#
         # Both parity blocks must contain at least two coefficients.
         P ≥ 3 || throw(ArgumentError("P must be at least 3: got $P"))
         #//////////////////////////////////////////////////////////////////////#
+
+        scale = _intervalscale(a, b, T)
 
         # Include coefficient zero in the even block. With even P this
         # block has one more entry, as in Gibson's HelmholtzSolver.
@@ -112,7 +120,7 @@ struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, V<:Vecto
         u = T[p == 1 ? 0 : _β(p+2, P)/(4p*(p+1)) for p in 1:P]
         cache = (l, d, u)
 
-        return new{T, P, typeof(Be), typeof(Bo), Vector{T}}(neum, Be, Bo, cache)
+        return new{T, P, typeof(Be), typeof(Bo), Vector{T}}(scale, neum, Be, Bo, cache)
     end
 end
 
@@ -124,9 +132,9 @@ end
     update!(h::HelmoltzSolver, θ₀, θ₁)
 
 Assemble and UL-factorise the even and odd systems for `θ₀*u'' - θ₁*u = f`.
-For a physical interval `[a, b]`, use `θ₀ = ν*(2/(b-a))^2` and `θ₁ = λ`
-to represent Gibson's operator `ν*d²/dy² - λ`. The right-hand side and wall
-values or derivatives are not rescaled.
+Coefficients and boundary data refer to the physical interval selected at
+construction. The solver applies the affine derivative scaling internally;
+do not rescale `θ₀` or Neumann data before passing them.
 
 Reassemble all matrix entries before factorisation, replacing any previous
 factors and storing their reciprocal pivots. Subsequent solves reuse
@@ -142,21 +150,21 @@ function update!( h::HelmoltzSolver{T, P},
         throw(ArgumentError("the pure Neumann Poisson operator requires a separate mean-mode solve"))
     #//////////////////////////////////////////////////////////////////////////#
 
-    _assemble_helmoltz!(h.Be, h.cache, θ₀, θ₁, 2, h.neum); ul!(h.Be)
-    _assemble_helmoltz!(h.Bo, h.cache, θ₀, θ₁, 3, h.neum); ul!(h.Bo)
+    _assemble_helmoltz!(h.Be, h.cache, θ₀*h.scale^2, θ₁, 2, h.neum, h.scale); ul!(h.Be)
+    _assemble_helmoltz!(h.Bo, h.cache, θ₀*h.scale^2, θ₁, 3, h.neum, h.scale); ul!(h.Bo)
 
     return nothing
 end
 
-# Assembly accepts either owned scalar vectors or views into a batched matrix.
+# Assemble the scalar parity block in its existing storage.
 # It replaces every matrix entry before UL modifies the stored diagonals.
-function _assemble_helmoltz!(B::QuasiTridiagonal{T, M}, cache, θ₀, θ₁, p₀, neum) where {T, M}
+function _assemble_helmoltz!(B::QuasiTridiagonal{T, M}, cache, θ₀, θ₁, p₀, neum, scale) where {T, M}
     l, d, u = cache
 
     # The dense first row imposes the wall value or positive-y derivative.
     for i in 1:M
         n = p₀ - 2 + 2*(i-1)
-        B.b[i] = neum ? n^2 : 1
+        B.b[i] = neum ? scale*n^2 : 1
     end
 
     # Interior rows contain integrated equations for even or odd degrees.
@@ -179,7 +187,7 @@ raw"""
 Compute the Chebyshev coefficients of the solution to
 
 ```math
-\theta_0\,u''(y) - \theta_1\,u(y) = f(y), \qquad -1 \le y \le 1,
+\theta_0\,u''(y) - \theta_1\,u(y) = f(y), \qquad a \le y \le b,
 ```
 using the operator coefficients supplied to the most recent
 `update!(h, θ₀, θ₁)`. Write the result into `u` and return that vector;
@@ -190,8 +198,8 @@ Both arguments are one-based coefficient vectors of length `P+1`, representing
 ordinary Chebyshev expansions
 
 ```math
-u_P(y) = \sum_{n=0}^{P} \widehat{u}_n T_n(y), \qquad
-f_P(y) = \sum_{n=0}^{P} \widehat{f}_n T_n(y).
+u_P(y) = \sum_{n=0}^{P} \widehat{u}_n T_n(ξ), \qquad
+f_P(y) = \sum_{n=0}^{P} \widehat{f}_n T_n(ξ).
 ```
 
 On entry, `f[n+1]` contains ``\widehat{f}_n``; on return,
@@ -203,15 +211,15 @@ factors and cached integration weights.
 For a Dirichlet solver (`neum=false`), the boundary arguments prescribe
 
 ```math
-u_P(+1) = u_+, \qquad
-u_P(-1) = u_-.
+u_P(b) = u_+, \qquad
+u_P(a) = u_-.
 ```
 
 For a Neumann solver (`neum=true`), they instead prescribe
 
 ```math
-u_P'(+1) = u_+, \qquad
-u_P'(-1) = u_-.
+u_P'(b) = u_+, \qquad
+u_P'(a) = u_-.
 ```
 
 Both derivatives are taken in the positive `y` direction, not along the

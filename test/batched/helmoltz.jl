@@ -282,3 +282,34 @@ end
         @test (@allocated update!(h, θ₀, θ₁)) == 0
     end
 end
+
+# The same mapped-domain case runs on CPU and, on a GPU host, CUDA. A
+# translated non-unit interval and complex nonzero boundary data exercise
+# physical second derivatives, endpoint derivatives and Adapt preservation.
+function test_batched_domain(to_backend=identity; backend="CPU")
+    @testset "Batched physical interval: $backend" begin
+        a, b, P, B = 2.0, 5.0, 12, 5
+        y = chebpoints(P; a, b)
+        θ₀ = collect(range(0.5, 1.0; length=B))
+        θ₁ = collect(range(1.0, 2.0; length=B))
+        amplitudes = [1 + 0.1s*im for s in 1:B]
+        exact = zeros(ComplexF64, B, P+1)
+        f = similar(exact)
+        for s in 1:B
+            exact[s, :] .= amplitudes[s] .* chebcoeffs(1 .+ y .+ y.^3)
+            f[s, :] .= amplitudes[s] .* chebcoeffs(θ₀[s] .* (6 .* y) .- θ₁[s] .* (1 .+ y .+ y.^3))
+        end
+        for neum in (false, true)
+            h = to_backend(BatchedHelmoltzSolver(P, B; a, b, neum))
+            @test h.scale == 2/(b-a)
+            update!(h, to_backend(θ₀), to_backend(θ₁))
+            walls = neum ? (1+3b^2, 1+3a^2) : (1+b+b^3, 1+a+a^3)
+            u, rhs = to_backend(similar(f)), to_backend(f)
+            solve!(h, u, rhs, to_backend(amplitudes .* walls[1]), to_backend(amplitudes .* walls[2]))
+            @test Array(u) ≈ exact rtol=2e-11 atol=2e-11
+            @test Array(rhs) == f
+        end
+    end
+end
+
+test_batched_domain()

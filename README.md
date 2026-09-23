@@ -6,11 +6,23 @@
 
 [![CI](https://github.com/Davide-Lasagna-s-Lab/ChebyshevHelmoltzSolvers.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/Davide-Lasagna-s-Lab/ChebyshevHelmoltzSolvers.jl/actions/workflows/CI.yml)
 
-In-place Chebyshev tau solvers for one-dimensional Helmholtz boundary-value
-problems on $[-1,1]$. Scalar operators use even/odd quasi-tridiagonal UL
-factorisations and cache the reciprocal pivots for repeated substitutions.
-The coupled solver caches its homogeneous responses and
-influence matrix, leaving only two scalar solves per right-hand side.
+ChebyshevHelmoltzSolvers.jl solves one-dimensional Helmholtz and factored
+fourth-order boundary-value problems on a finite interval using the
+**Chebyshev tau method**: it expands the solution in Chebyshev polynomials,
+imposes the differential equation on the lower-degree residual coefficients,
+and uses the remaining equations to enforce boundary conditions
+([Canuto et al., 2006](https://doi.org/10.1007/978-3-540-30726-6)).
+An integrated coefficient formulation separates even and odd degrees into
+quasi-tridiagonal systems, solved by in-place UL factorisation; see
+[Greengard (1991)](https://doi.org/10.1137/0728057) and
+[Viswanath (2014)](https://arxiv.org/abs/1205.2717v2) for spectral-integration
+background. For the coupled fourth-order problem, an **influence-matrix
+method** adds homogeneous solutions to a particular solution and determines
+their amplitudes from a small system enforcing the remaining boundary
+conditions, following the boundary-correction principle used by
+[Kleiser and Schumann (1980)](https://publikationen.bibliothek.kit.edu/240013603).
+Factors and homogeneous responses are cached for repeated right-hand sides;
+independent Helmholtz systems can also be solved in batches on CPU or CUDA.
 
 ## Installation
 
@@ -22,6 +34,10 @@ Pkg.add(url="https://github.com/Davide-Lasagna-s-Lab/ChebyshevHelmoltzSolvers.jl
 ```
 
 ## Chebyshev representation
+
+For the polynomial expansions, transforms and spectral discretisations used
+here, see [Canuto et al. (2006)](https://doi.org/10.1007/978-3-540-30726-6),
+especially Chapters 2–4.
 
 Functions are represented by truncated expansions in Chebyshev polynomials
 of the first kind. A degree-$P$ expansion has $P+1$ coefficients; these are
@@ -50,7 +66,7 @@ transform by `P`, and halves the coefficients of degrees `0` and `P`. The input 
 
 | Operation | Purpose |
 | --- | --- |
-| `chebpoints(P)` | Return the $P+1$ descending Chebyshev–Lobatto points. |
+| `chebpoints(P; a=-1, b=1)` | Return the $P+1$ Chebyshev–Lobatto points from `b` to `a`. |
 | `chebcoeffs(values)` | Convert descending Lobatto samples into ordinary Chebyshev coefficients. |
 | `chebvalues(a)` | Evaluate coefficients at descending Lobatto points. |
 | `diff!(a)` | Differentiate Chebyshev coefficients in place on [-1, 1]. |
@@ -58,18 +74,47 @@ transform by `P`, and halves the coefficients of degrees `0` and `P`. The input 
 | `diff(a, :left)` | Evaluate the derivative at -1 without a derivative workspace. |
 | `diff(a, :right)` | Evaluate the derivative at +1. |
 
-For a physical interval $x\in[a,b]$, use the affine map
+### Physical intervals
+
+All solver constructors accept `a` and `b` keywords, defaulting to `-1` and
+`1`. Use the same endpoints when constructing collocation points:
+
+```julia
+P = 16
+a, b = 2.0, 5.0
+y = chebpoints(P; a, b)
+h = HelmoltzSolver(P; a, b)
+update!(h, 1.0, 4.0)
+
+# u(y) = (y-a)(b-y), hence u''(y) = -2, with u(a) = u(b) = 0.
+f = chebcoeffs(-2 .- 4 .* (y .- a) .* (b .- y))
+u = similar(f)
+solve!(h, u, f)
+chebvalues(u)  # ≈ (y .- a) .* (b .- y)
+```
+
+The coefficients now represent $T_n(\xi)$, where
 
 $$
-x=\frac{a+b}{2}+\frac{b-a}{2}y,\qquad
-\frac{\mathrm{d}}{\mathrm{d}x}=\frac{2}{b-a}\frac{\mathrm{d}}{\mathrm{d}y},\qquad
-\frac{\mathrm{d}^2}{\mathrm{d}x^2}=\left(\frac{2}{b-a}\right)^2\frac{\mathrm{d}^2}{\mathrm{d}y^2}.
+\xi=\frac{2y-a-b}{b-a},\qquad
+\frac{\mathrm{d}}{\mathrm{d}y}=\frac{2}{b-a}\frac{\mathrm{d}}{\mathrm{d}\xi}.
 $$
 
-Multiply the physical second-derivative coefficient by $(2/(b-a))^2$ before
-passing it to the solver. Multiply returned endpoint derivatives by
-$2/(b-a)$ to obtain physical derivatives.
+The solver internally replaces $\theta_0$ by $\theta_0(2/(b-a))^2$.
+Pass **physical** operator coefficients without manual scaling.
+For `neum=true`, pass physical derivatives $u'(b)$ and $u'(a)$, in that
+order; the boundary rows include the same first-derivative scale.
+Dirichlet data and the forcing are unchanged.
 
+`CoupledHelmoltzSolver(P; a, b)` applies the map to both operators.
+`BatchedHelmoltzSolver(P, B; a, b)` uses one interval shared by all systems,
+on both CPU and GPU. Endpoints must be finite and satisfy $a<b$.
+
+The transforms `chebcoeffs` and `chebvalues` need no interval argument:
+their input and output ordering stays from `b` to `a`. The standalone
+`diff!`, `diff2!` and endpoint `diff` utilities differentiate with respect
+to the reference coordinate $\xi$; multiply their results by $2/(b-a)$
+or $(2/(b-a))^2$ for physical first or second derivatives.
 
 ## Scalar Helmholtz solver
 
@@ -81,7 +126,7 @@ $$
 u(1)=u_+, \qquad u(-1)=u_-.
 $$
 
-`HelmoltzSolver(P, T=Float64)` allocates factors and integration weights for degree
+`HelmoltzSolver(P, T=Float64; a=-1, b=1)` allocates factors and integration weights for degree
 `P ≥ 3`, with `P + 1` coefficients. Call `update!` before solving and whenever
 the operator coefficients change. Right-hand sides and boundary values can
 change without another update.
@@ -117,6 +162,15 @@ compatibility condition and additive constant separately.
 The scalar tau equations are imposed through degree `P - 2`; the two
 highest right-hand-side coefficients do not enter the solve.
 
+### The Chebyshev tau method
+
+A degree-$P$ approximation has $P+1$ unknown coefficients. Imposing every
+coefficient equation as well as two boundary conditions would overdetermine
+it. The tau method instead retains $P-1$ differential-equation conditions
+and uses the two remaining equations for the boundary data. It enforces
+conditions on the **spectral residual**, rather than requiring the equation
+to hold separately at each Lobatto point.
+
 Writing $u_P$ and $f_P$ for the degree-$P$ expansions, the tau conditions are
 
 $$
@@ -124,10 +178,34 @@ $$
 \qquad n=0,\ldots,P-2,
 $$
 
-where $[\cdot]_n$ denotes the coefficient of $T_n$. The two boundary equations
+Equivalently, the residual may contain only the two highest modes:
+
+$$
+\theta_0u_P''-\theta_1u_P-f_P
+=\tau_{P-1}T_{P-1}+\tau_PT_P.
+$$
+
+The amplitudes $\tau_{P-1}$ and $\tau_P$ are residual coefficients, not
+additional inputs. The two boundary conditions are satisfied by the
+polynomial solution, while these highest residual components are left
+unconstrained. This also explains why the last two forcing coefficients
+do not affect the computed solution. The same construction applies on a
+mapped interval using $T_n(\xi)$ and the physical derivative scale.
+See [Canuto et al. (2006)](https://doi.org/10.1007/978-3-540-30726-6)
+for the general tau framework.
+
+Here $[\cdot]_n$ denotes the coefficient of $T_n$. The two boundary equations
 complete the $P+1$ equations for the solution coefficients. Integrating the
 interior equations twice produces a tridiagonal recurrence within each
 parity; the wall conditions supply the dense first row of each block.
+
+For background on integration-based spectral boundary-value solvers, see
+[Greengard (1991)](https://doi.org/10.1137/0728057) and
+[Viswanath (2014)](https://arxiv.org/abs/1205.2717v2). These discuss related
+formulations; the tau truncation and compact UL recurrences implemented here
+are specified below.
+
+### Neumann boundary conditions
 
 For `neum=true`, the boundary equations instead prescribe
 
@@ -167,6 +245,78 @@ responses and stores their 2×2 influence matrix. Each `solve!` computes the
 particular solution with two scalar Helmholtz solves, then adds the cached
 responses to cancel the two wall derivatives.
 
+This is an influence-matrix construction: a small boundary system selects
+the amplitudes of homogeneous responses. For historical background in
+spectral flow solvers, see [Kleiser and Schumann (1980)](https://publikationen.bibliothek.kit.edu/240013603).
+The coupled problem here is the factored fourth-order boundary-value problem
+above, rather than a complete incompressible-flow solver.
+
+### The influence-matrix method
+
+Let $\mathcal{L}_1=\theta_0D^2-\theta_1$ and
+$\mathcal{L}_2=\theta_2D^2-\theta_3$. Solving each second-order equation
+requires two boundary conditions, but the original problem supplies four
+conditions on $v$ and none on the intermediate field $u$. The influence
+matrix determines the otherwise unknown endpoint values of $u$ so that
+all four conditions on $v$ hold.
+
+First compute a particular pair with convenient homogeneous Dirichlet data:
+
+$$
+\mathcal{L}_1u_p=f,\quad u_p(a)=u_p(b)=0,
+\qquad
+\mathcal{L}_2v_p=u_p,\quad v_p(a)=v_p(b)=0.
+$$
+
+This generally leaves nonzero endpoint derivatives of $v_p$. Construct two
+homogeneous response pairs, labelled $+$ and $-$:
+
+$$
+\mathcal{L}_1u_\pm=0,\qquad
+\mathcal{L}_2v_\pm=u_\pm,\qquad v_\pm(a)=v_\pm(b)=0,
+$$
+
+$$
+(u_+(b),u_+(a))=(1,0),\qquad
+(u_-(b),u_-(a))=(0,1).
+$$
+
+All these equations are solved with the same discrete tau operators.
+Linearity means that
+
+$$
+v=v_p+\delta_+v_++\delta_-v_-
+$$
+
+preserves the discrete differential equations and the zero endpoint values.
+The remaining derivative conditions reduce to
+
+$$
+\underbrace{\begin{pmatrix}
+v_+'(b)&v_-'(b)\\
+v_+'(a)&v_-'(a)
+\end{pmatrix}}_{A}
+\begin{pmatrix}\delta_+\\\delta_-\end{pmatrix}
+=-\begin{pmatrix}v_p'(b)\\v_p'(a)\end{pmatrix}.
+$$
+
+Each column of $A$ measures the effect of one unit endpoint
+value of $u$ on the two endpoint derivatives of $v$—hence the name
+*influence matrix*. On a mapped interval the common derivative scale cancels
+between both sides, so the implementation can evaluate this correction
+using reference-coordinate derivatives.
+
+The responses and $A$ depend on the operators and interval,
+but not on $f$. `update!` computes them once; each subsequent `solve!`
+requires only the two particular Helmholtz solves, a $2\times2$ linear solve,
+and the response combination. This boundary-correction construction is
+related to the influence-matrix technique of
+[Kleiser and Schumann (1980)](https://publikationen.bibliothek.kit.edu/240013603);
+here it enforces the derivative conditions of the factored fourth-order
+problem. The influence matrix must be nonsingular.
+
+### Example
+
 For $v=(1-y^2)^2$, the problem $v^{(4)}=24$ has the required wall conditions:
 
 ```julia
@@ -200,7 +350,7 @@ $$
 
 Each system has its own coefficients and boundary data; systems are not coupled.
 
-`BatchedHelmoltzSolver(P, B, T=Float64; neum=false)` allocates storage for
+`BatchedHelmoltzSolver(P, B, T=Float64; neum=false, a=-1, b=1)` allocates storage for
 `B > 0` independent operators of degree `P ≥ 3`, with real factors of type `T`
 and real or complex right-hand sides. Call `update!(h, θ₀, θ₁)` before solving
 and whenever the operator coefficients change. `θ₀` and `θ₁` are vectors of
@@ -391,6 +541,79 @@ functional NVIDIA device is available here.
 
 ## Quasi-tridiagonal matrices and UL factorisation
 
+### Where the structure comes from
+
+The quasi-tridiagonal matrices are the **even and odd coefficient blocks of
+each Helmholtz solve**. They are not differentiation matrices on the
+collocation grid. Their unknowns are Chebyshev coefficients.
+
+Directly differentiating a Chebyshev expansion twice couples a coefficient
+to many higher coefficients of the same parity. The solver instead
+integrates the differential equation twice. Integration has a short
+recurrence: for $n\ge2$,
+
+$$
+\int T_n(\xi)\,\mathrm{d}\xi
+=\frac{T_{n+1}(\xi)}{2(n+1)}
+-\frac{T_{n-1}(\xi)}{2(n-1)}+C.
+$$
+
+Thus two integrations couple only degrees $n-2$, $n$ and $n+2$, with
+special weights at the lowest degrees. The twice-integrated second
+derivative recovers $u$ up to an affine function; its two integration
+constants affect only degrees zero and one. Boundary conditions determine
+those two remaining degrees of freedom.
+
+For $\alpha=\theta_0[2/(b-a)]^2$, the retained integrated equations have
+the form
+
+$$
+-\theta_1 L_n\widehat{u}_{n-2}
++(\alpha+\theta_1 D_n)\widehat{u}_n
+-\theta_1 H_n\widehat{u}_{n+2}
+=
+L_n\widehat{f}_{n-2}-D_n\widehat{f}_n+H_n\widehat{f}_{n+2},
+\qquad n=2,\ldots,P.
+$$
+
+Here $L_n,D_n,H_n$ are the cached integration weights. Their terminal
+values incorporate the tau truncation, and terms beyond the expansion are
+absent. Because the degree changes by two, the unknowns split into
+
+$$
+\mathbf{u}_{\mathrm{even}}=(\widehat{u}_0,\widehat{u}_2,\widehat{u}_4,\ldots),
+\qquad
+\mathbf{u}_{\mathrm{odd}}=(\widehat{u}_1,\widehat{u}_3,\widehat{u}_5,\ldots).
+$$
+
+Within either ordering, each interior equation involves only the previous,
+current and next unknown: it is **tridiagonal**.
+
+The wall equations supply the extra row. Since $T_n(1)=1$ and
+$T_n(-1)=(-1)^n$, Dirichlet data give
+
+$$
+\sum_{n\ \mathrm{even}}\widehat{u}_n=\frac{u_++u_-}{2},
+\qquad
+\sum_{n\ \mathrm{odd}}\widehat{u}_n=\frac{u_+-u_-}{2}.
+$$
+
+Each equation touches every coefficient in its parity block, so it forms a
+**dense first row**. Neumann conditions have the same structure, with
+weights $[2/(b-a)]n^2$ and the corresponding even/odd combinations of wall
+derivatives. A tridiagonal interior plus this dense boundary row is what
+we call *quasi-tridiagonal*.
+
+`HelmoltzSolver` stores these blocks as `Be` and `Bo`, of sizes
+$\lfloor P/2\rfloor+1$ and $\lfloor(P+1)/2\rfloor$, respectively.
+`CoupledHelmoltzSolver` uses two such Helmholtz solvers, and therefore four
+parity blocks, followed by its small influence-matrix correction.
+`BatchedHelmoltzSolver` stores a bank of `Be` and `Bo` blocks, one pair per
+independent problem. The batch adds independent systems; it does not change
+the matrix structure.
+
+### Compact storage
+
 `QuasiTridiagonal(M, T)` stores a matrix with a dense first row and a
 tridiagonal interior. For example, when $M=5$,
 
@@ -398,10 +621,10 @@ $$
 Q=
 \begin{pmatrix}
 b_1 & b_2 & b_3 & b_4 & b_5 \\
-c_1 & a_2 & e_2 & 0 & 0 \\
-0 & c_2 & a_3 & e_3 & 0 \\
-0 & 0 & c_3 & a_4 & e_4 \\
-0 & 0 & 0 & c_4 & a_5
+l_1 & d_2 & u_2 & 0 & 0 \\
+0 & l_2 & d_3 & u_3 & 0 \\
+0 & 0 & l_3 & d_4 & u_4 \\
+0 & 0 & 0 & l_4 & d_5
 \end{pmatrix}.
 $$
 
@@ -413,9 +636,9 @@ $M\times M$ array:
 | Field | Before `ul!(Q)` | After `ul!(Q)` |
 | --- | --- | --- |
 | `b`, length $M$ | Dense first row $b_i$ | Reciprocal $1/\beta_1$ at index 1; entries $\beta_i$ for $i\ge2$ |
-| `l`, length $M-1$ | Subdiagonal $c_i$ | Multipliers $\ell_i$ of the unit lower factor |
-| `dᵢ`, length $M-1$ | Interior diagonal $a_{i+1}$ | Reciprocal pivots $1/p_{i+1}$ |
-| `u`, length $M-2$ | Superdiagonal $e_{i+1}$ | Unchanged |
+| `l`, length $M-1$ | Subdiagonal $l_i$ | Multipliers $\ell_i$ of the unit lower factor |
+| `dᵢ`, length $M-1$ | Interior diagonal $d_{i+1}$ | Reciprocal pivots $1/p_{i+1}$ |
+| `u`, length $M-2$ | Superdiagonal $u_{i+1}$ | Unchanged |
 
 The size constructor allocates zero-filled assembly buffers. Alternatively,
 `QuasiTridiagonal(b, l, dᵢ, u)` wraps existing vectors without copying.
@@ -430,9 +653,9 @@ $$
 U=
 \begin{pmatrix}
 \beta_1 & \beta_2 & \beta_3 & \beta_4 & \beta_5 \\
-0 & p_2 & e_2 & 0 & 0 \\
-0 & 0 & p_3 & e_3 & 0 \\
-0 & 0 & 0 & p_4 & e_4 \\
+0 & p_2 & u_2 & 0 & 0 \\
+0 & 0 & p_3 & u_3 & 0 \\
+0 & 0 & 0 & p_4 & u_4 \\
 0 & 0 & 0 & 0 & p_5
 \end{pmatrix},
 \qquad
@@ -451,14 +674,14 @@ $U$ is upper bidiagonal below its dense first row, and $L$ is unit lower
 bidiagonal. A conventional top-down elimination would spread the dense
 boundary row into the interior.
 
-Start with $p_M=a_M$. For $i=M-1,\ldots,2$, compute
+Start with $p_M=d_M$. For $i=M-1,\ldots,2$, compute
 
 $$
-\ell_i=\frac{c_i}{p_{i+1}},\qquad
-p_i=a_i-e_i\ell_i,
+\ell_i=\frac{l_i}{p_{i+1}},\qquad
+p_i=d_i-u_i\ell_i,
 $$
 
-then set $\ell_1=c_1/p_2$. The dense row satisfies
+then set $\ell_1=l_1/p_2$. The dense row satisfies
 
 $$
 \beta_M=b_M,\qquad
@@ -478,7 +701,7 @@ nonzero.
 
 $$
 z_M=\frac{r_M}{p_M},\qquad
-z_i=\frac{r_i-e_i z_{i+1}}{p_i},\qquad i=M-1,\ldots,2,
+z_i=\frac{r_i-u_i z_{i+1}}{p_i},\qquad i=M-1,\ldots,2,
 $$
 
 $$
@@ -543,5 +766,27 @@ real and complex coefficients,
 single and double precision, odd/even degrees, operator updates and
 preservation of cached homogeneous responses. Tests need only Julia's
 `Test` standard library in addition to the package dependencies.
+
+## References
+
+- C. Canuto, M. Y. Hussaini, A. Quarteroni and T. A. Zang (2006).
+  *Spectral Methods: Fundamentals in Single Domains*. Springer.
+  [DOI: 10.1007/978-3-540-30726-6](https://doi.org/10.1007/978-3-540-30726-6).
+  Background for Chebyshev approximation, spectral discretisation and algebraic solvers.
+- L. Greengard (1991). “Spectral Integration and Two-Point Boundary Value
+  Problems.” *SIAM Journal on Numerical Analysis*, **28**(4), 1071–1080.
+  [DOI: 10.1137/0728057](https://doi.org/10.1137/0728057);
+  [author-hosted paper](https://math.nyu.edu/~greengar/specint_sinum.pdf).
+  An integration-based formulation for constant-coefficient boundary-value problems.
+- D. Viswanath (2014 revision). “Spectral integration of linear boundary
+  value problems.” [arXiv:1205.2717v2](https://arxiv.org/abs/1205.2717v2)
+  (first submitted in 2012). Discusses spectral integration, bordered banded
+  systems and numerical accuracy.
+- L. Kleiser and U. Schumann (1980). “Treatment of incompressibility and
+  boundary conditions in 3-D numerical spectral simulations of plane channel
+  flows.” In *Proceedings of the Third GAMM Conference on Numerical Methods
+  in Fluid Mechanics*, Notes on Numerical Fluid Mechanics, vol. 2, Vieweg.
+  [Institutional record](https://publikationen.bibliothek.kit.edu/240013603).
+  Historical reference for influence-matrix treatment of spectral boundary conditions.
 
 The logo adapts the illustration and visual identity of FDHelmoltzSolver.jl.

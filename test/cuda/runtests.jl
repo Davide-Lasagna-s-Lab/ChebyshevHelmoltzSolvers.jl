@@ -19,6 +19,7 @@ to_gpu(x) = Adapt.adapt(CuArray, x) # preserve Float64, unlike convenience conve
 # 2D/3D y-last fields. Their independent references are built on the CPU.
 include(joinpath(@__DIR__, "..", "batched", "helmoltz.jl"))
 test_batched_helmholtz(to_gpu; backend="CUDA")
+test_batched_domain(to_gpu; backend="CUDA")
 
 #//////////////////////////////////////////////////////////////////////////////#
 #///                             CUDA UL TESTS                              ///#

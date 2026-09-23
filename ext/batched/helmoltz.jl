@@ -73,12 +73,12 @@ end
     @inbounds begin
         for i in 1:M
             n = p₀ - 2 + 2*(i-1)
-            Q.b[s, i] = h.neum ? n^2 : 1
+            Q.b[s, i] = h.neum ? h.scale*n^2 : 1
         end
         for i in 1:M-1
             p = p₀ + 2*(i-1)
             Q.l[s, i] = -θ₁*l[p]
-            Q.dᵢ[s, i] = θ₀ + θ₁*d[p]
+            Q.dᵢ[s, i] = θ₀*h.scale^2 + θ₁*d[p]
             i < M-1 && (Q.u[s, i] = -θ₁*u[p])
         end
     end

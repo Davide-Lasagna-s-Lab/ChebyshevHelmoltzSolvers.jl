@@ -7,15 +7,15 @@ export CoupledHelmoltzSolver
 #//////////////////////////////////////////////////////////////////////////////#
 
 """
-    CoupledHelmoltzSolver(P, T=Float64)
+    CoupledHelmoltzSolver(P, T=Float64; a=-1, b=1)
 
 Cache the Chebyshev tau solve of the factored fourth-order problem
 ```text
 θ₀*u'' - θ₁*u = r,
 θ₂*v'' - θ₃*v = u,
-v(±1) = v'(±1) = 0,
+v(a) = v(b) = v'(a) = v'(b) = 0,
 ```
-on `[-1, 1]`, using expansions of degree `P ≥ 3` and coefficient type `T`.
+on `[a, b]` (default `[-1, 1]`), using expansions of degree `P ≥ 3` and coefficient type `T`.
 
 Store two scalar Helmholtz solvers, a particular-solution workspace, two
 homogeneous influence responses and their 2×2 influence matrix. Call
@@ -26,14 +26,14 @@ struct CoupledHelmoltzSolver{T, P, H<:HelmoltzSolver{T, P}, C<:AbstractVector{T}
        hu::H                    # factors for θ₀*D² - θ₁
        hv::H                    # factors for θ₂*D² - θ₃
        vₛ::NTuple{3, C}         # particular workspace and two cached responses
-    A_inf::MMatrix{2, 2, T, 4}  # influence matrix, filled by update!
+        A::MMatrix{2, 2, T, 4}  # influence matrix, filled by update!
 
-    function CoupledHelmoltzSolver(P::Int, ::Type{T}=Float64) where {T}
-        hu = HelmoltzSolver(P, T)
-        hv = HelmoltzSolver(P, T)
+    function CoupledHelmoltzSolver(P::Int, ::Type{T}=Float64; a=-1, b=1) where {T}
+        hu = HelmoltzSolver(P, T; a, b)
+        hv = HelmoltzSolver(P, T; a, b)
         vₛ = ntuple(_ -> zeros(T, P+1), 3)
-        A_inf = MMatrix{2, 2, T}(undef)
-        return new{T, P, typeof(hu), typeof(vₛ[1])}(hu, hv, vₛ, A_inf)
+        A = MMatrix{2, 2, T}(undef)
+        return new{T, P, typeof(hu), typeof(vₛ[1])}(hu, hv, vₛ, A)
     end
 end
 
@@ -69,11 +69,13 @@ function update!(solver::CoupledHelmoltzSolver,
     solve!(solver.hu, work, v₋, 0, 1)
     solve!(solver.hv, v₋, work, 0, 0)
 
+    # Reference derivatives suffice: the common physical derivative scale
+    # cancels between the influence matrix and the correction right-hand side.
     # Rows select the upper/lower wall; columns select the two responses.
-    solver.A_inf[1, 1] = diff(v₊, :right)
-    solver.A_inf[2, 1] = diff(v₊, :left)
-    solver.A_inf[1, 2] = diff(v₋, :right)
-    solver.A_inf[2, 2] = diff(v₋, :left)
+    solver.A[1, 1] = diff(v₊, :right)
+    solver.A[2, 1] = diff(v₊, :left)
+    solver.A[1, 2] = diff(v₋, :right)
+    solver.A[2, 2] = diff(v₋, :left)
     return nothing
 end
 
@@ -90,8 +92,8 @@ distinct from the solver's workspaces.
 
 Solve the two scalar tau equations successively for a particular solution.
 Then use the homogeneous responses and influence matrix cached by `update!`
-to choose their amplitudes and impose `v'(±1) = 0`. All three velocity
-responses already satisfy `v(±1) = 0`. Each call requires only two scalar
+to choose their amplitudes and impose `v'(a) = v'(b) = 0`. All three velocity
+responses already satisfy `v(a) = v(b) = 0`. Each call requires only two scalar
 Helmholtz solves and one 2×2 solve.
 
 Call `update!` before the first solve and whenever the operator coefficients
@@ -118,7 +120,7 @@ function solve!(solver::CoupledHelmoltzSolver{T, P},
     # Cancel the particular solution's wall derivatives using the cached matrix.
     b = SVector{2}(-diff(r, :right),
                    -diff(r, :left))
-    δ₊, δ₋ = SMatrix(solver.A_inf)\b
+    δ₊, δ₋ = SMatrix(solver.A)\b
 
     r .+= δ₊ .* v₊ .+ δ₋ .* v₋
     return r
