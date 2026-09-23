@@ -673,9 +673,9 @@ integrates the differential equation twice. Integration has a short
 recurrence: for $n\ge2$,
 
 $$
-\int T_n(\xi)\,\mathrm{d}\xi
-=\frac{T_{n+1}(\xi)}{2(n+1)}
--\frac{T_{n-1}(\xi)}{2(n-1)}+C.
+\int T_n(y)\,\mathrm{d}y
+=\frac{T_{n+1}(y)}{2(n+1)}
+-\frac{T_{n-1}(y)}{2(n-1)}+C.
 $$
 
 Thus two integrations couple only degrees $n-2$, $n$ and $n+2$, with
