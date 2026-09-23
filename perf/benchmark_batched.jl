@@ -1,7 +1,6 @@
 # Run: julia --threads=1 --project=. perf/benchmark_batched.jl [results.csv]
 # CPU Float64, EVEN parity only (M = (Ny+1)/2); factors are built once, outside timing.
-# Every timed iteration resets the RHS. "roundtrip" also packs/unpacks the RHS
-# with two preallocated permutedims!: (M, nsystems) <-> (nsystems, M).
+# Every timed iteration resets the RHS; batched solves use native storage.
 using ChebyshevHelmoltzSolvers, LinearAlgebra, Random, Printf
 
 #//////////////////////////////////////////////////////////////////////////////#
@@ -33,14 +32,6 @@ end
 function packed_step!(batch, rhs, source)
     copyto!(rhs, source)
     ldiv!(batch, rhs)
-    return nothing
-end
-
-function roundtrip_step!(batch, rhs, packed, source)
-    copyto!(rhs, source)
-    permutedims!(packed, rhs, (2, 1))
-    ldiv!(batch, packed)
-    permutedims!(rhs, packed, (2, 1))
     return nothing
 end
 
@@ -90,10 +81,7 @@ function benchmark_case(io, Ny, nsystems, factors)
     @assert isapprox(reference, transpose(packed); rtol=2e-12, atol=1e-12)
     native = measure!(packed_step!, (batch, packed, packed_source))
     row(io, Ny, M, nsystems, "packed", native, first(scalar))
-    roundtrip_step!(batch, rhs, packed, source)
-    @assert isapprox(reference, rhs; rtol=2e-12, atol=1e-12)
-    total = measure!(roundtrip_step!, (batch, rhs, packed, source))
-    row(io, Ny, M, nsystems, "roundtrip", total, first(scalar))
+
 end
 
 #//////////////////////////////////////////////////////////////////////////////#

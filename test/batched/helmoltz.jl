@@ -269,3 +269,16 @@ test_batched_helmholtz()
         @test any(x -> !isfinite(x), Q.dᵢ)
     end
 end
+
+@testset "Batched update allocations" begin
+    # Even and odd degrees exercise equal and unequal parity block sizes.
+    # Warm each specialisation before checking that repeated updates allocate
+    # no wrappers, views or replacement factor arrays.
+    for P in (16, 17), neum in (false, true)
+        h = BatchedHelmoltzSolver(P, 64; neum)
+        θ₀, θ₁ = ones(64), fill(2.0, 64)
+        update!(h, θ₀, θ₁)
+        @allocated update!(h, θ₀, θ₁)
+        @test (@allocated update!(h, θ₀, θ₁)) == 0
+    end
+end

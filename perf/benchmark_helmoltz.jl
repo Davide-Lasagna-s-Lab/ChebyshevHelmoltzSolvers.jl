@@ -19,13 +19,6 @@ function strided_solve!(solvers, u, f)
     end
 end
 
-# Include both layout conversions when starting and ending with y-first fields.
-function roundtrip!(batch, u, f, packed_u, packed_f, bc)
-    permutedims!(packed_f, f, (2, 1))
-    solve!(batch, packed_u, packed_f, bc, bc)
-    permutedims!(u, packed_u, (2, 1))
-end
-
 function scalar_update!(solvers, theta0, theta1)
     for s in eachindex(solvers)
         update!(solvers[s], theta0[s], theta1[s])
@@ -44,13 +37,13 @@ function measure(f::F) where {F}
     repeats = clamp(ceil(Int, 0.003/max(elapsed, eps())), 1, 2000)
     bytes = @allocated f()
     GC.gc()
-    samples = zeros(21)
+    samples = zeros(100)
     for i in eachindex(samples)
         samples[i] = (@elapsed begin
             for _ in 1:repeats; f(); end
         end)/repeats
     end
-    return sort!(samples)[11]*1e6, bytes
+    return minimum(samples)*1e6, bytes
 end
 
 function benchmark_case(io, Ny, B)
@@ -73,15 +66,12 @@ function benchmark_case(io, Ny, B)
     @assert isapprox(reference, transpose(packed_u); rtol=3e-12, atol=3e-12)
     strided_solve!(solvers, packed_u, packed_f)
     @assert isapprox(reference, transpose(packed_u); rtol=3e-12, atol=3e-12)
-    roundtrip!(batch, u, f, packed_u, packed_f, bc)
-    @assert isapprox(reference, u; rtol=3e-12, atol=3e-12)
 
     baseline = measure(() -> scalar_solve!(solvers, u, f))
     cases = (
         ("scalar_contiguous", baseline),
         ("scalar_strided", measure(() -> strided_solve!(solvers, packed_u, packed_f))),
         ("batched", measure(() -> solve!(batch, packed_u, packed_f, bc, bc))),
-        ("roundtrip", measure(() -> roundtrip!(batch, u, f, packed_u, packed_f, bc))),
         ("scalar_update", measure(() -> scalar_update!(solvers, theta0, theta1))),
         ("batched_update", measure(() -> update!(batch, theta0, theta1))),
     )
@@ -105,12 +95,12 @@ function main()
         println(io, "LLVM CPU target: ", Sys.CPU_NAME)
         println(io, "OS: ", Sys.KERNEL, "; architecture: ", Sys.ARCH)
         println(io, "Julia threads: ", Threads.nthreads(), "; BLAS threads: ", BLAS.get_num_threads())
-        println(io, "Precision: Float64; 21 warmed samples; median per complete batch")
+        println(io, "Precision: Float64; 100 warmed samples; minimum per complete batch")
         println(io, "Solve timings exclude factor setup; update timings include assembly, UL and validation")
     end
     open(output, "w") do io
-        println(io, "Ny,systems,mode,median_us,allocated_bytes,speedup_vs_scalar")
-        for Ny in (33, 65, 129), B in (64, 256, 4096)
+        println(io, "Ny,systems,mode,minimum_us,allocated_bytes,speedup_vs_scalar")
+        for Ny in 2 .^ (3:9), B in (64, 256, 1024, 4096, 16384)
             benchmark_case(io, Ny, B)
         end
     end

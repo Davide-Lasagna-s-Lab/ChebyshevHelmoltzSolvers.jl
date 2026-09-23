@@ -78,8 +78,8 @@ end
 
 Reassemble and UL-factorise the operators in the existing factor arrays.
 Both coefficient vectors must match the batch size and precision. CPU
-updates pass views of each matrix to the shared scalar assembly; GPU
-updates assemble and factor on device. No replacement solver or factor
+updates operate directly on the batched storage; GPU updates assemble and
+factor on device. No replacement solver or factor
 bank is constructed. Coefficients must not alias the factor storage. CPU
 coefficient vectors passed to a GPU batch are uploaded; device vectors avoid
 those transfers.
@@ -101,7 +101,8 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
 
     # Views of external coefficient tables are allowed; views into factors
     # would be overwritten before all parity systems have read their values.
-    for factors in (h.Be, h.Bo), a in (factors.b, factors.l, factors.dᵢ, factors.u)
+    for a in (h.Be.b, h.Be.l, h.Be.dᵢ, h.Be.u,
+              h.Bo.b, h.Bo.l, h.Bo.dᵢ, h.Bo.u)
         (Base.mightalias(θ₀, a) || Base.mightalias(θ₁, a)) &&
             throw(ArgumentError("operator coefficients must not alias the factors"))
     end
@@ -114,13 +115,10 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
         throw(ArgumentError("the pure Neumann Poisson operator requires a separate mean-mode solve"))
     #//////////////////////////////////////////////////////////////////////////#
 
-    # _system wraps row views; neither assembly nor ul! copies factors.
-    for s in 1:B
-        _assemble_helmoltz!(_system(h.Be, s), h.cache, θ₀[s], θ₁[s], 2, h.neum)
-        _assemble_helmoltz!(_system(h.Bo, s), h.cache, θ₀[s], θ₁[s], 3, h.neum)
-    end
-    ul!(h.Be)
-    ul!(h.Bo)
+    # Assemble and factor each parity across contiguous systems. No scalar
+    # wrappers or row views are constructed for individual operators.
+    _assemble_helmoltz!(h.Be, h.cache, θ₀, θ₁, 2, h.neum); ul!(h.Be)
+    _assemble_helmoltz!(h.Bo, h.cache, θ₀, θ₁, 3, h.neum); ul!(h.Bo)
 
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # UL is unpivoted: validate the new factors after every update before
@@ -128,14 +126,46 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
     # Also reject overflowing reciprocals of tiny pivots. These predicates
     # use CPU loops or CUDA reductions, without copying the factor arrays.
     # The first column of b contains each inverse boundary pivot.
-    for factors in (h.Be, h.Bo)
-        all(a -> all(isfinite, a), (factors.b, factors.l, factors.dᵢ, factors.u)) &&
-            all(!iszero, view(factors.b, :, 1)) && all(!iszero, factors.dᵢ) ||
+    # Iterate arrays rather than differently sized parity wrappers, keeping
+    # every check concretely typed even when the two blocks have unequal sizes.
+    for a in (h.Be.b, h.Be.l, h.Be.dᵢ, h.Be.u,
+              h.Bo.b, h.Bo.l, h.Bo.dᵢ, h.Bo.u)
+        all(isfinite, a) ||
             throw(ArgumentError("the batch has a zero or nonfinite reciprocal UL pivot"))
     end
+    all(!iszero, view(h.Be.b, :, 1)) && all(!iszero, h.Be.dᵢ) &&
+        all(!iszero, view(h.Bo.b, :, 1)) && all(!iszero, h.Bo.dᵢ) ||
+        throw(ArgumentError("the batch has a zero or nonfinite reciprocal UL pivot"))
     #//////////////////////////////////////////////////////////////////////////#
 
     return h
+end
+
+# Assemble the same entries as the scalar method, with systems in the
+# inner loop so each pass writes contiguous memory and can use SIMD.
+function _assemble_helmoltz!(Q::BatchedQuasiTridiagonal{T, B, M, Matrix{T}},
+                            cache, θ₀, θ₁, p₀, neum) where {T, B, M}
+    l, d, u = cache
+    @inbounds for i in 1:M
+        n = p₀ - 2 + 2*(i-1)
+        boundary = neum ? n^2 : 1
+        @simd for s in 1:B
+            Q.b[s, i] = boundary
+        end
+    end
+    @inbounds for i in 1:M-1
+        p = p₀ + 2*(i-1)
+        @simd for s in 1:B
+            Q.l[s, i] = -θ₁[s]*l[p]
+            Q.dᵢ[s, i] = θ₀[s] + θ₁[s]*d[p]
+        end
+        if i < M-1
+            @simd for s in 1:B
+                Q.u[s, i] = -θ₁[s]*u[p]
+            end
+        end
+    end
+    return Q
 end
 
 #//////////////////////////////////////////////////////////////////////////////#

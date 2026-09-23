@@ -52,20 +52,13 @@ struct BatchedQuasiTridiagonal{T<:AbstractFloat, B, M, A<:AbstractMatrix{T}}
 end
 
 #//////////////////////////////////////////////////////////////////////////////#
-#///                  STORAGE ADAPTATION AND SYSTEM VIEWS                   ///#
+#///                          STORAGE ADAPTATION                           ///#
 #//////////////////////////////////////////////////////////////////////////////#
 
 # Adapt transfers factors once, preserving precision with adapt(CuArray, Q).
 function Adapt.adapt_structure(to, Q::BatchedQuasiTridiagonal)
     return BatchedQuasiTridiagonal(Adapt.adapt(to, Q.b), Adapt.adapt(to, Q.l),
                                    Adapt.adapt(to, Q.dᵢ), Adapt.adapt(to, Q.u))
-end
-
-# A scalar matrix wrapper over one system: every vector is a view, so assembly
-# writes directly into the batch's existing storage.
-@inline function _system(Q::BatchedQuasiTridiagonal, s)
-    return QuasiTridiagonal(view(Q.b, s, :), view(Q.l, s, :),
-                            view(Q.dᵢ, s, :), view(Q.u, s, :))
 end
 
 #//////////////////////////////////////////////////////////////////////////////#
@@ -80,14 +73,36 @@ arrays. Reassemble the original matrix entries before calling again. Pivots
 must have finite, nonzero reciprocals; this routine does not validate them.
 """
 function ul!(Q::BatchedQuasiTridiagonal{T, B, M, Matrix{T}}) where {T, B, M}
-    for s in 1:B
-        _ul_system!(Q, s)
+    # The recurrence is sequential in coefficient index, but systems are
+    # independent. Sweep contiguous columns rather than strided system rows.
+    @inbounds begin
+        @simd for s in 1:B
+            Q.l[s, M-1] /= Q.dᵢ[s, M-1]
+            Q.b[s, M-1] -= Q.b[s, M] * Q.l[s, M-1]
+        end
+        for i in M-2:-1:1
+            @simd for s in 1:B
+                Q.dᵢ[s, i] -= Q.u[s, i] * Q.l[s, i+1]
+                Q.l[s, i] /= Q.dᵢ[s, i]
+                Q.b[s, i] -= Q.b[s, i+1] * Q.l[s, i]
+            end
+        end
+        # Preserve the scalar storage convention: invert pivots only after
+        # elimination, leaving all other dense-row entries unchanged.
+        @simd for s in 1:B
+            Q.b[s, 1] = inv(Q.b[s, 1])
+        end
+        for k in 1:M-1
+            @simd for s in 1:B
+                Q.dᵢ[s, k] = inv(Q.dᵢ[s, k])
+            end
+        end
     end
     return Q
 end
 
 # Factor one system directly in the batch buffers, on either CPU or GPU.
-# The caller selects s: a CPU loop or one CUDA thread per system.
+# The CUDA caller selects s with one thread per system.
 # No views or per-system arrays are needed; s must be a valid system index.
 @inline function _ul_system!(Q::BatchedQuasiTridiagonal{T, B, M}, s) where {T, B, M}
     @inbounds begin

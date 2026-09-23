@@ -3,5 +3,5 @@ Hardware: Apple M5
 LLVM CPU target: apple-m1
 OS: Darwin; architecture: aarch64
 Julia threads: 1; BLAS threads: 1
-Precision: Float64; 21 warmed samples; median per complete batch
+Precision: Float64; 100 warmed samples; minimum per complete batch
 Solve timings exclude factor setup; update timings include assembly, UL and validation

@@ -1,4 +1,23 @@
-export chebcoeffs, chebvalues
+export chebpoints, chebcoeffs, chebvalues
+
+#//////////////////////////////////////////////////////////////////////////////#
+#///                         CHEBYSHEV LOBATTO POINTS                        ///#
+#//////////////////////////////////////////////////////////////////////////////#
+
+"""
+    chebpoints(P::Integer)
+
+Return the `P+1` Chebyshev–Lobatto points `cospi(j/P)`, for `j = 0:P`,
+ordered from +1 to -1. The polynomial degree `P` must be positive.
+"""
+function chebpoints(P::Integer)
+    #///////////////////////////////// CHECKS /////////////////////////////////#
+    # Both endpoints require a positive polynomial degree.
+    P >= 1 || throw(ArgumentError("P must be positive"))
+    #//////////////////////////////////////////////////////////////////////////#
+
+    return [cospi(j/P) for j = 0:P]
+end
 
 #//////////////////////////////////////////////////////////////////////////////#
 #///                     CHEBYSHEV PROFILE COEFFICIENTS                     ///#

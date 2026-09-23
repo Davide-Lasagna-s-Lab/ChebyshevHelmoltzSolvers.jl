@@ -2,7 +2,7 @@
 
 Run from the package root with an otherwise idle machine. Scripts warm up
 specialized code before timing, validate results against a scalar reference,
-and record medians rather than compilation latency. Stored results were
+and exclude compilation latency. Stored results were
 collected on an Apple M5 MacBook Air with Julia 1.12.6, using one Julia and one
 BLAS thread. They do not describe an A100 or a complete DNS time step.
 
@@ -18,26 +18,29 @@ suitable Python environment). It only reads the CSV; it does not rerun solves.
 Figures are saved as PNG and SVG in `results/`.
 
 `benchmark_helmoltz.jl [output.csv]` measures Float64 problems at coefficient
-counts 33, 65 and 129, with 64, 256 and 4096 different operators. For each case:
+counts `8, 16, 32, 64, 128, 256, 512`, with batch sizes
+`64, 256, 1024, 4096, 16384`. For each case:
 
 - **scalar_contiguous**: independent scalar solvers with contiguous coefficient vectors.
 - **scalar_strided**: the same scalar solvers applied to rows of system-first fields.
 - **batched**: full batched solves in native `(system, coefficient)` storage.
-- **roundtrip**: batched solves plus both layout conversions, using preallocated buffers.
 - **scalar_update / batched_update**: assembly and UL factorisation, including each API's validation.
 
 Solve measurements include checks, source assembly, wall conditions and both
 parity substitutions. They exclude factor setup and preallocation. Each sample
-repeats calls for approximately 3 ms; the CSV reports the median of 21 samples
+repeats calls for approximately 3 ms; the CSV reports the minimum of 100 samples
 in microseconds **per complete batch**, and allocated bytes per call.
-`speedup_vs_scalar` compares solve paths only; update rows use `NaN` there.
+`minimum_us` is the lowest sampled per-call time after warm-up, an estimate
+of execution under minimal interference rather than typical latency.
+`speedup_vs_scalar` is the ratio of the scalar and batched minima; update
+rows use `NaN` there.
 No BLAS work occurs in the solver kernels; one BLAS thread is set for reproducibility.
 
 Results: [CSV](results/helmoltz-cpu.csv), [environment](results/environment.txt),
 [solve figure](results/helmoltz-solves.png), [update figure](results/helmoltz-updates.png).
-The main README discusses both the solve benefit and the slower, allocating
-batched update. Factor buffers are reused, but temporary Julia view/wrapper
-objects still allocate; reuse of arrays alone does not imply zero allocations.
+The main README reports both solve and update speedups. CPU assembly and
+factorisation sweep contiguous systems with SIMD; warmed batched updates
+allocate zero bytes, including coefficient and pivot validation.
 
 ## Substitution-only microbenchmark
 
@@ -47,8 +50,8 @@ julia --startup-file=no --threads=1 --project perf/benchmark_batched.jl perf/res
 
 This measures only even-parity UL substitutions, with RHS reset included.
 It excludes assembly, the odd block and all physical-space transforms.
-`packed` uses native system-first storage; `roundtrip` additionally packs and
-unpacks. Its speedup is not interchangeable with the full Helmholtz benchmark.
+`packed` uses native system-first storage. Its speedup is not interchangeable
+with the full Helmholtz benchmark.
 Current results are in [quasitridiag-cpu.csv](results/quasitridiag-cpu.csv).
 The older `batched-cpu.csv` is retained as historical data from the removed
 blocked implementation and is not used in the current figures.
