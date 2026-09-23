@@ -663,14 +663,42 @@ timings. The newer ComplexF64 CPU/A100 measurements are recorded separately.
 
 ### Where the structure comes from
 
-The quasi-tridiagonal matrices are the **even and odd coefficient blocks of
-each Helmholtz solve**. They are not differentiation matrices on the
-collocation grid. Their unknowns are Chebyshev coefficients.
+The matrix structure follows from three choices: use Chebyshev coefficients
+as the unknowns, integrate the differential equation twice, and collect even
+and odd coefficients separately. The differential equation then gives rows
+with at most three entries; the wall conditions give one dense row in each
+system. The steps below explain why.
 
-Directly differentiating a Chebyshev expansion twice couples a coefficient
-to many higher coefficients of the same parity. The solver instead
-integrates the differential equation twice. Integration has a short
-recurrence: for $n\ge2$,
+#### 1. Start with the differential equation and its unknowns
+
+Consider the Dirichlet problem on the package's fixed interval:
+
+$$
+\theta_0 u''(y)-\theta_1 u(y)=f(y),\qquad -1\le y\le1,
+\qquad u(1)=u_+,\quad u(-1)=u_-.
+$$
+
+We approximate the solution and forcing by degree-$P$ expansions:
+
+$$
+u_P(y)=\sum_{n=0}^{P}\widehat{u}_nT_n(y),\qquad
+f_P(y)=\sum_{n=0}^{P}\widehat{f}_nT_n(y).
+$$
+
+The $P+1$ numbers $\widehat{u}_0,\ldots,\widehat{u}_P$ are the unknowns.
+They are **coefficients of polynomials**, not values of $u$ at grid points.
+We therefore need $P+1$ equations to determine them.
+
+The tau method supplies $P-1$ equations by requiring the Chebyshev
+coefficients of $\theta_0u_P''-\theta_1u_P-f_P$ to vanish at degrees
+$0,\ldots,P-2$. The remaining two equations are the wall conditions.
+We do not also set the residual coefficients at degrees $P-1$ and $P$ to
+zero: that would give too many equations.
+
+#### 2. Integrate to obtain a short coefficient relation
+
+A second derivative written directly in coefficient space couples many
+coefficients. Integration has a simpler structure. For $n\ge2$,
 
 $$
 \int T_n(y)\,\mathrm{d}y
@@ -678,27 +706,66 @@ $$
 -\frac{T_{n-1}(y)}{2(n-1)}+C.
 $$
 
-Thus two integrations couple only degrees $n-2$, $n$ and $n+2$, with
-special weights at the lowest degrees. The twice-integrated second
-derivative recovers $u$ up to an affine function; its two integration
-constants affect only degrees zero and one. Boundary conditions determine
-those two remaining degrees of freedom.
+One integration changes the degree by one. Two integrations therefore
+connect degrees differing by two, as well as the original degree.
 
-For $\alpha=\theta_0[2/(b-a)]^2$, the retained integrated equations have
-the form
+To apply this to the **retained tau equations**, define
 
 $$
--\theta_1 L_n\widehat{u}_{n-2}
-+(\alpha+\theta_1 D_n)\widehat{u}_n
--\theta_1 H_n\widehat{u}_{n+2}
+g_n=
+\begin{cases}
+\theta_1\widehat{u}_n+\widehat{f}_n,&0\le n\le P-2,\\
+0,&n>P-2.
+\end{cases}
+$$
+
+Those equations are equivalent to the polynomial identity
+
+$$
+\theta_0u_P''(y)=\sum_{n=0}^{P-2}g_nT_n(y).
+$$
+
+Integrating this identity twice and comparing coefficients of degree
+$n=2,\ldots,P$ gives
+
+$$
+\theta_0\widehat{u}_n
+=\frac{c_{n-2}g_{n-2}}{4n(n-1)}
+-\frac{g_n}{2(n^2-1)}
++\frac{g_{n+2}}{4n(n+1)},
+\qquad c_0=2,\quad c_j=1\ \text{for }j\ge1.
+$$
+
+The factor $c_0$ accounts for integrating the constant polynomial $T_0=1$.
+The two arbitrary integration constants multiply $1$ and $y$, that is,
+$T_0$ and $T_1$. They do not appear in the equations for $n\ge2$;
+we still need the two wall equations to close the system.
+
+For a concrete example, take $n=4$ and $P\ge8$. Substituting the definition
+of $g_n$ and moving the unknowns to the left gives
+
+$$
+-\frac{\theta_1}{48}\widehat{u}_2
++\left(\theta_0+\frac{\theta_1}{30}\right)\widehat{u}_4
+-\frac{\theta_1}{80}\widehat{u}_6
 =
-L_n\widehat{f}_{n-2}-D_n\widehat{f}_n+H_n\widehat{f}_{n+2},
-\qquad n=2,\ldots,P.
+\frac{\widehat{f}_2}{48}
+-\frac{\widehat{f}_4}{30}
++\frac{\widehat{f}_6}{80}.
 $$
 
-Here $L_n,D_n,H_n$ are the cached integration weights. Their terminal
-values incorporate the tau truncation, and terms beyond the expansion are
-absent. Because the degree changes by two, the unknowns split into
+This is one matrix row: it involves **only three unknowns**,
+$\widehat{u}_2$, $\widehat{u}_4$ and $\widehat{u}_6$.
+Near the highest degree, some terms vanish because $g_n=0$ for $n>P-2$.
+This cutoff matters: integrating the full degree-$P$ forcing instead would
+produce a different discretisation. In the code, the cached integration
+weights include this cutoff through `_β`.
+
+#### 3. Reorder the unknowns into two tridiagonal systems
+
+Every integrated equation connects only $n-2$, $n$ and $n+2$.
+An equation for an even degree therefore contains only even coefficients;
+an equation for an odd degree contains only odd coefficients. Order them as
 
 $$
 \mathbf{u}_{\mathrm{even}}=(\widehat{u}_0,\widehat{u}_2,\widehat{u}_4,\ldots),
@@ -706,11 +773,29 @@ $$
 \mathbf{u}_{\mathrm{odd}}=(\widehat{u}_1,\widehat{u}_3,\widehat{u}_5,\ldots).
 $$
 
-Within either ordering, each interior equation involves only the previous,
-current and next unknown: it is **tridiagonal**.
+In either list, degrees differing by two are now **neighbours**. Thus each
+integrated equation couples at most the previous, current and next entries
+of its list: this is a tridiagonal row. For example, the $n=4$ equation above
+connects three consecutive entries of the even list.
 
-The wall equations supply the extra row. Since $T_n(1)=1$ and
-$T_n(-1)=(-1)^n$, Dirichlet data give
+At this stage each block has one fewer equation than unknowns. For example,
+with $P=6$, the even block has four unknowns (degrees 0, 2, 4 and 6) but
+only three integrated equations, for $n=2,4,6$. The odd block has three
+unknowns and two equations, for $n=3,5$.
+
+#### 4. Add the boundary row to each block
+
+At the two walls, $T_n(1)=1$ and $T_n(-1)=(-1)^n$. Consequently,
+
+$$
+\widehat{u}_0+\widehat{u}_1+\widehat{u}_2+\widehat{u}_3+\cdots=u_+,
+$$
+
+$$
+\widehat{u}_0-\widehat{u}_1+\widehat{u}_2-\widehat{u}_3+\cdots=u_-.
+$$
+
+Adding and subtracting these equations separates the two parity blocks:
 
 $$
 \sum_{n\ \mathrm{even}}\widehat{u}_n=\frac{u_++u_-}{2},
@@ -718,19 +803,34 @@ $$
 \sum_{n\ \mathrm{odd}}\widehat{u}_n=\frac{u_+-u_-}{2}.
 $$
 
-Each equation touches every coefficient in its parity block, so it forms a
-**dense first row**. Neumann conditions have the same structure, with
-weights $[2/(b-a)]n^2$ and the corresponding even/odd combinations of wall
-derivatives. A tridiagonal interior plus this dense boundary row is what
-we call *quasi-tridiagonal*.
+Each block now has its missing equation. Unlike an interior row, this row
+contains **every coefficient in the block**, with weight one. The code
+places it first. A dense first row followed by tridiagonal interior rows
+is precisely the *quasi-tridiagonal* structure shown in the next section.
 
-`HelmoltzSolver` stores these blocks as `Be` and `Bo`, of sizes
-$\lfloor P/2\rfloor+1$ and $\lfloor(P+1)/2\rfloor$, respectively.
-`CoupledHelmoltzSolver` uses two such Helmholtz solvers, and therefore four
-parity blocks, followed by its small influence-matrix correction.
-`BatchedHelmoltzSolver` stores a bank of `Be` and `Bo` blocks, one pair per
-independent problem. The batch adds independent systems; it does not change
-the matrix structure.
+For Neumann data $u'(1)=g_+$ and $u'(-1)=g_-$, the same separation works
+because $T_n'(1)=n^2$ and $T_n'(-1)=(-1)^{n+1}n^2$:
+
+$$
+\sum_{n\ \mathrm{even}}n^2\widehat{u}_n=\frac{g_+-g_-}{2},
+\qquad
+\sum_{n\ \mathrm{odd}}n^2\widehat{u}_n=\frac{g_++g_-}{2}.
+$$
+
+Only the boundary row changes: its entries are now $n^2$ rather than one.
+Here derivatives are in the positive $y$ direction at both walls.
+Pure Neumann Poisson is the singular exception: forcing and wall data must
+satisfy a compatibility condition, and a zero-mean gauge fixes the otherwise
+undetermined constant. See [Neumann boundary conditions](#neumann-boundary-conditions).
+
+#### 5. Identify these matrices in the code
+
+`HelmoltzSolver` stores the even and odd blocks as `Be` and `Bo`, of sizes
+$\lfloor P/2\rfloor+1$ and $\lfloor(P+1)/2\rfloor$.
+`CoupledHelmoltzSolver` uses two Helmholtz solvers, hence four parity blocks,
+followed by its small influence-matrix correction. `BatchedHelmoltzSolver`
+stores one pair of blocks per independent problem. Batching repeats this
+same matrix structure; it does not introduce coupling between systems.
 
 ### Compact storage
 
