@@ -104,8 +104,27 @@ function _influence_system!(h, s)
 end
 
 function _influence!(h::BatchedCoupledHelmoltzSolver{T, H, <:Matrix}) where {T, H}
-    for s in axes(h.A, 1)
-        _influence_system!(h, s)
+    _, v₊, v₋ = h.vₛ
+    B, Ny = size(v₊)
+    fill!(h.A, 0)
+    # Accumulate wall slopes across contiguous systems. A system-first
+    # traversal would stride through whole coefficient columns on the CPU.
+    @inbounds for n in 1:Ny-1
+        sign = isodd(n) ? 1 : -1
+        @simd for s in 1:B
+            h.A[s, 1] += n^2*v₊[s, n+1]
+            h.A[s, 2] += sign*n^2*v₊[s, n+1]
+            h.A[s, 3] += n^2*v₋[s, n+1]
+            h.A[s, 4] += sign*n^2*v₋[s, n+1]
+        end
+    end
+    @inbounds @simd for s in 1:B
+        a, b, c, d = h.A[s, 1], h.A[s, 2], h.A[s, 3], h.A[s, 4]
+        determinant = a*d-b*c
+        h.A[s, 1] = d/determinant
+        h.A[s, 2] = -b/determinant
+        h.A[s, 3] = -c/determinant
+        h.A[s, 4] = a/determinant
     end
     return h
 end
