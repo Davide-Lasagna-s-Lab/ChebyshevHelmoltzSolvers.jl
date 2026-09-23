@@ -599,7 +599,9 @@ target), Float64, one Julia thread and one BLAS thread, on 2026-09-23.
 These are **complete Helmholtz solves**, including RHS assembly, boundary
 conditions, both parity substitutions and public API checks. Factors are
 reused. Each point is the minimum of 100 warmed samples. The solve-time plot
-shows time per system (batch time divided by $B$); update times are per batch.
+shows time per system (batch time divided by $B$), as does the update figure.
+Both speedup plots use $N_y$ on the horizontal axis, with one curve per
+system count and matching colours and markers.
 
 Across `N_y = 8, 16, 32, 64, 128, 256, 512` and batch sizes
 `B = 64, 256, 1024, 4096, 16384`, native batched solves were
