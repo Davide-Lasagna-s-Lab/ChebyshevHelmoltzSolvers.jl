@@ -10,7 +10,7 @@ BLAS thread. They do not describe an A100 or a complete DNS time step.
 
 ```sh
 julia --startup-file=no --threads=1 --project perf/benchmark_helmoltz.jl
-python3 perf/plot_benchmarks.py
+python3 perf/plot_benchmarks.py perf/results/<commit>/helmoltz-cpu.csv
 ```
 
 The plot script requires Matplotlib (`python3 -m pip install matplotlib` in a
@@ -74,3 +74,16 @@ site; factors, fields and stored wall vectors are transferred before timing.
 The CUDA extension was successfully loaded locally, but `CUDA.functional()`
 was false. **No GPU execution, numerical validation or A100 timings are claimed.**
 Run these commands on the A100 before relying on the GPU path.
+
+## Source provenance
+
+New full-solver runs require committed solver and benchmark sources and default
+to `results/<full-commit>/helmoltz-cpu.csv`. `environment.txt` records the measured
+commit and execution environment. Existing CSV files are not overwritten: supply
+a fresh output path for repeated measurements at the same commit. Version tags
+are not required; an ordinary source commit is sufficient.
+
+The earlier results are also archived under `results/e172199923eec97924d8e9a8040277813a2b0ff2/`.
+Their provenance file distinguishes the commit that stored the results from an
+unrecorded measurement revision. They must not be presented as measurements of
+newer solver changes. The GPU benchmark and validation remain deferred.

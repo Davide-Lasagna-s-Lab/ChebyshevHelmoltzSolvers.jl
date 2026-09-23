@@ -87,9 +87,16 @@ end
 function main()
     Threads.nthreads() == 1 || error("Run with --threads=1")
     BLAS.set_num_threads(1)
-    output = isempty(ARGS) ? joinpath(@__DIR__, "results", "helmoltz-cpu.csv") : only(ARGS)
+    root = dirname(@__DIR__)
+    commit = readchomp(`git -C $root rev-parse HEAD`)
+    # A commit identifies the measured code only when relevant sources are clean.
+    dirty = readchomp(`git -C $root status --porcelain -- src Project.toml perf/benchmark_helmoltz.jl`)
+    isempty(dirty) || error("Commit the solver and benchmark changes before recording timings")
+    output = isempty(ARGS) ? joinpath(@__DIR__, "results", commit, "helmoltz-cpu.csv") : only(ARGS)
+    isfile(output) && error("Results already exist; choose a new output path to preserve the previous run")
     mkpath(dirname(output))
     open(joinpath(dirname(output), "environment.txt"), "w") do io
+        println(io, "Source commit: ", commit)
         println(io, "Julia: ", VERSION)
         println(io, "Hardware: ", Sys.cpu_info()[1].model)
         println(io, "LLVM CPU target: ", Sys.CPU_NAME)

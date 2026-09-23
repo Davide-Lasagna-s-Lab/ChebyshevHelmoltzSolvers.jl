@@ -13,12 +13,12 @@ _β(p, P) = p > P-2 ? 0 : 1
 #//////////////////////////////////////////////////////////////////////////////#
 
 """
-    HelmoltzSolver(P, T=Float64; neum=false, a=-1, b=1)
+    HelmoltzSolver(P, T=Float64; neum=false)
 
 Construct a degree-`P` Chebyshev tau solver for
 
 ```math
-θ₀ u''(y) - θ₁ u(y) = f(y), \\qquad a ≤ y ≤ b.
+θ₀ u''(y) - θ₁ u(y) = f(y), \\qquad -1 ≤ y ≤ 1.
 ```
 
 Use Dirichlet wall values by default, or prescribe `u′` at both walls with
@@ -29,13 +29,8 @@ and again whenever `θ₀` or `θ₁` changes.
 
 # Numerical method
 
-Set `ξ = (2y-a-b)/(b-a)` and `scale = 2/(b-a)`. Operator coefficients
-and Neumann data use physical derivatives. The reference-coordinate
-formulas below use `θ₀*scale²` in place of `θ₀` and multiply Neumann
-boundary rows by `scale`.
-
 Represent the solution and forcing by ordinary Chebyshev expansions,
-`u(y) = sum(u[p+1]*T_p(ξ), p=0:P)`, with no half-weight on the zeroth coefficient.
+`u(y) = sum(u[p+1]*T_p(y), p=0:P)`, with no half-weight on the zeroth coefficient.
 The tau formulation sets the residual coefficients of degrees `0:P-2` to
 zero. The last two differential-equation conditions are replaced by the two
 wall conditions; residuals in degrees `P-1` and `P` are not constrained.
@@ -81,28 +76,26 @@ The two quasi-tridiagonal systems are solved by UL factorisation without
 pivoting. Factorisation and each subsequent solve require `O(P)` work;
 changing the forcing or wall data does not require new factors. The operator
 must have nonzero pivots with finite reciprocals. Pure Neumann Poisson
-(`neum=true`, `θ₁=0`) requires a compatibility condition and a pressure/solution
-gauge and is not handled by this solver.
+(`neum=true`, `θ₁=0`) is supported for compatible forcing and wall data;
+its solution has zero integral over `[-1, 1]`.
 
 Concurrent solves may share the factors with disjoint destination storage,
 provided no concurrent `update!` modifies the solver.
 """
 struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, V<:Vector{T}}
-    scale::T    # d/dy = scale*d/dξ for the affine reference coordinate
-     neum::Bool # prescribe derivatives instead of values at both walls
-       Be::QE   # factorisation for even Chebyshev coefficients
-       Bo::QO   # factorisation for odd Chebyshev coefficients
-    cache::NTuple{3, V} # integration weights (l, d, u)
+       neum::Bool # prescribe derivatives instead of values at both walls
+         Be::QE   # factorisation for even Chebyshev coefficients
+         Bo::QO   # factorisation for odd Chebyshev coefficients
+      cache::NTuple{3, V} # integration weights (l, d, u)
+    poisson::Base.RefValue{T} # θ₀ for singular Neumann Poisson; zero otherwise
 
     function HelmoltzSolver(   P::Int,
                                 ::Type{T}=Float64;
-                            neum::Bool=false, a=-1, b=1) where {T}
+                              neum::Bool=false) where {T}
         #/////////////////////////////// CHECKS ///////////////////////////////#
         # Both parity blocks must contain at least two coefficients.
         P ≥ 3 || throw(ArgumentError("P must be at least 3: got $P"))
         #//////////////////////////////////////////////////////////////////////#
-
-        scale = _intervalscale(a, b, T)
 
         # Include coefficient zero in the even block. With even P this
         # block has one more entry, as in Gibson's HelmholtzSolver.
@@ -120,7 +113,7 @@ struct HelmoltzSolver{T, P, QE<:QuasiTridiagonal, QO<:QuasiTridiagonal, V<:Vecto
         u = T[p == 1 ? 0 : _β(p+2, P)/(4p*(p+1)) for p in 1:P]
         cache = (l, d, u)
 
-        return new{T, P, typeof(Be), typeof(Bo), Vector{T}}(scale, neum, Be, Bo, cache)
+        return new{T, P, typeof(Be), typeof(Bo), Vector{T}}(neum, Be, Bo, cache, Ref(zero(T)))
     end
 end
 
@@ -132,39 +125,48 @@ end
     update!(h::HelmoltzSolver, θ₀, θ₁)
 
 Assemble and UL-factorise the even and odd systems for `θ₀*u'' - θ₁*u = f`.
-Coefficients and boundary data refer to the physical interval selected at
-construction. The solver applies the affine derivative scaling internally;
-do not rescale `θ₀` or Neumann data before passing them.
+The interval is `[-1, 1]`. Coefficients must be finite and `θ₀` nonzero.
+Singular Neumann Poisson operators use a zero-mean gauge at solve time.
 
 Reassemble all matrix entries before factorisation, replacing any previous
 factors and storing their reciprocal pivots. Subsequent solves reuse
 these factors until the next update.
-Return `nothing`.
+Return `h`.
 """
 function update!( h::HelmoltzSolver{T, P},
                  θ₀::Real,
                  θ₁::Real) where {T, P}
     #///////////////////////////////// CHECKS /////////////////////////////////#
-    # Pure Neumann Poisson needs a compatibility condition and a pressure gauge.
-    h.neum && iszero(θ₁) &&
-        throw(ArgumentError("the pure Neumann Poisson operator requires a separate mean-mode solve"))
+    # Reject invalid coefficients before changing reusable factors.
+    isfinite(θ₀) && isfinite(θ₁) && !iszero(θ₀) ||
+        throw(ArgumentError("operator coefficients must be finite and θ₀ must be nonzero"))
     #//////////////////////////////////////////////////////////////////////////#
 
-    _assemble_helmoltz!(h.Be, h.cache, θ₀*h.scale^2, θ₁, 2, h.neum, h.scale); ul!(h.Be)
-    _assemble_helmoltz!(h.Bo, h.cache, θ₀*h.scale^2, θ₁, 3, h.neum, h.scale); ul!(h.Bo)
+    _assemble_helmoltz!(h.Be, h.cache, θ₀, θ₁, 2, h.neum); ul!(h.Be)
+    _assemble_helmoltz!(h.Bo, h.cache, θ₀, θ₁, 3, h.neum); ul!(h.Bo)
 
-    return nothing
+    #///////////////////////////////// CHECKS /////////////////////////////////#
+    # Unpivoted UL may break down even for a nonsingular negative-shift matrix.
+    # A failed update must not be followed by a solve until valid factors exist.
+    _check_factors(h.Be)
+    _check_factors(h.Bo)
+    #//////////////////////////////////////////////////////////////////////////#
+
+    h.poisson[] = h.neum && iszero(θ₁) ? θ₀ : zero(T)
+    return h
 end
 
 # Assemble the scalar parity block in its existing storage.
 # It replaces every matrix entry before UL modifies the stored diagonals.
-function _assemble_helmoltz!(B::QuasiTridiagonal{T, M}, cache, θ₀, θ₁, p₀, neum, scale) where {T, M}
+function _assemble_helmoltz!(B::QuasiTridiagonal{T, M}, cache, θ₀, θ₁, p₀, neum) where {T, M}
     l, d, u = cache
 
     # The dense first row imposes the wall value or positive-y derivative.
+    # For singular Poisson, the even derivative condition follows from
+    # compatibility; replace it by u₀=0 and select the mean after the solve.
     for i in 1:M
         n = p₀ - 2 + 2*(i-1)
-        B.b[i] = neum ? scale*n^2 : 1
+        B.b[i] = neum && iszero(θ₁) && p₀ == 2 ? (i == 1) : (neum ? n^2 : 1)
     end
 
     # Interior rows contain integrated equations for even or odd degrees.
@@ -187,7 +189,7 @@ raw"""
 Compute the Chebyshev coefficients of the solution to
 
 ```math
-\theta_0\,u''(y) - \theta_1\,u(y) = f(y), \qquad a \le y \le b,
+\theta_0\,u''(y) - \theta_1\,u(y) = f(y), \qquad -1 \le y \le 1,
 ```
 using the operator coefficients supplied to the most recent
 `update!(h, θ₀, θ₁)`. Write the result into `u` and return that vector;
@@ -198,34 +200,37 @@ Both arguments are one-based coefficient vectors of length `P+1`, representing
 ordinary Chebyshev expansions
 
 ```math
-u_P(y) = \sum_{n=0}^{P} \widehat{u}_n T_n(ξ), \qquad
-f_P(y) = \sum_{n=0}^{P} \widehat{f}_n T_n(ξ).
+u_P(y) = \sum_{n=0}^{P} \widehat{u}_n T_n(y), \qquad
+f_P(y) = \sum_{n=0}^{P} \widehat{f}_n T_n(y).
 ```
 
 On entry, `f[n+1]` contains ``\widehat{f}_n``; on return,
 `u[n+1]` contains ``\widehat{u}_n``. These are coefficients, not values
-at collocation points. Both vectors must have the solver's element type and
-must not alias. Solution storage must also be distinct from the solver's
+at collocation points. Both vectors must have the same element type, either
+`T` or `Complex{T}` for factors of type `T`, and must not alias. Solution storage must also be distinct from the solver's
 factors and cached integration weights.
 
 For a Dirichlet solver (`neum=false`), the boundary arguments prescribe
 
 ```math
-u_P(b) = u_+, \qquad
-u_P(a) = u_-.
+u_P(1) = u_+, \qquad
+u_P(-1) = u_-.
 ```
 
 For a Neumann solver (`neum=true`), they instead prescribe
 
 ```math
-u_P'(b) = u_+, \qquad
-u_P'(a) = u_-.
+u_P'(1) = u_+, \qquad
+u_P'(-1) = u_-.
 ```
 
 Both derivatives are taken in the positive `y` direction, not along the
 outward normal. Boundary data default to zero and may change between solves
-without another `update!`. The assembled boundary-value problem must be
-nonsingular; pure Neumann Poisson problems require a separate pressure gauge.
+without another `update!`. For pure Neumann Poisson (`θ₁=0`), compatibility
+requires `integral(f, -1, 1) = θ₀*(u₊-u₋)` and the returned solution has zero
+integral. Compatibility uses forcing degrees `0:P-2`, consistently with the
+tau equations; incompatible data raise `ArgumentError` before changing `u`.
+Uninitialised or invalid factors also raise `ArgumentError`.
 
 The tau solution satisfies the two boundary conditions and sets the Chebyshev
 coefficients of ``\theta_0 u_P'' - \theta_1 u_P - f_P`` to zero for degrees
@@ -233,11 +238,16 @@ coefficients of ``\theta_0 u_P'' - \theta_1 u_P - f_P`` to zero for degrees
 consequently, `f[P]` and `f[P+1]` do not affect the solution.
 """
 function solve!( h::HelmoltzSolver{T, P},
-                 u::AbstractVector{T},
-                 f::AbstractVector{T},
+                 u::AbstractVector,
+                 f::AbstractVector,
                 u₊=0,
                 u₋=0) where {T, P}
     #///////////////////////////////// CHECKS /////////////////////////////////#
+    # Real factors support real or complex fields at the same precision.
+    _check_precision(T, u, f)
+    # Detect uninitialised, failed or externally damaged factors before writes.
+    _check_factors(h.Be)
+    _check_factors(h.Bo)
     # Degree fixes the number of coefficients, regardless of vector storage.
     Base.require_one_based_indexing(u, f)
     length(u) == length(f) == P+1 ||
@@ -251,11 +261,13 @@ function solve!( h::HelmoltzSolver{T, P},
     end
     any(a -> Base.mightalias(u, a), h.cache) &&
         throw(ArgumentError("u must not alias the integration weights"))
+    # Compatibility uses the retained tau forcing, not its last two entries.
+    iszero(h.poisson[]) || _check_neumann(f, h.poisson[], u₊, u₋)
     #//////////////////////////////////////////////////////////////////////////#
 
     # Assemble into the output: neighbouring source coefficients remain intact.
     # Differentiation exchanges parity, swapping the Neumann wall combinations.
-    u[1] = (h.neum ? u₊ - u₋ : u₊ + u₋)*0.5
+    u[1] = iszero(h.poisson[]) ? (h.neum ? u₊ - u₋ : u₊ + u₋)*0.5 : zero(eltype(u))
     u[2] = (h.neum ? u₊ + u₋ : u₊ - u₋)*0.5
     l, d, upper_weight = h.cache
     @inbounds @simd for p in 2:P
@@ -266,5 +278,45 @@ function solve!( h::HelmoltzSolver{T, P},
     # Solve the two parities directly in output storage, without packing.
     ldiv!(h.Be, view(u, 1:2:P+1))
     ldiv!(h.Bo, view(u, 2:2:P+1))
+    # The temporary u₀=0 gauge is shifted to zero interval mean.
+    iszero(h.poisson[]) || (u[1] = -sum(u[n+1]/(1-n^2) for n in 2:2:P))
     return u
+end
+
+#//////////////////////////////////////////////////////////////////////////////#
+#///                       SHARED SOLVER VALIDATION                         ///#
+#//////////////////////////////////////////////////////////////////////////////#
+
+# Public solves share one precision contract, checked before mutating output.
+function _check_precision(::Type{T}, u, f) where {T}
+    eltype(u) == eltype(f) && eltype(u) <: Union{T, Complex{T}} ||
+        throw(ArgumentError("u and f must share element type $T or $(Complex{T})"))
+    return nothing
+end
+
+# Called at update and scalar solve boundaries, never inside substitutions.
+function _check_factors(Q::QuasiTridiagonal)
+    all(a -> all(isfinite, a), (Q.b, Q.l, Q.dᵢ, Q.u)) &&
+        !iszero(Q.b[1]) && all(!iszero, Q.dᵢ) ||
+        throw(ArgumentError("uninitialised or invalid UL factors; call update! with a valid operator"))
+    return nothing
+end
+
+# ∫f dy = θ₀(u′(1)-u′(-1)). For the tau problem f is truncated at P-2.
+# The tolerance follows the sum's scale, allowing floating-point cancellation
+# without silently projecting incompatible forcing onto a different problem.
+function _check_neumann(f, θ₀, u₊, u₋)
+    T = typeof(θ₀)
+    integral = zero(eltype(f))
+    magnitude = zero(T)
+    for n in 0:2:length(f)-3
+        term = f[n+1]/(1-n^2)
+        integral += term
+        magnitude += abs(term)
+    end
+    boundary = θ₀*(u₊-u₋)/2
+    magnitude += abs(θ₀*u₊/2) + abs(θ₀*u₋/2)
+    abs(integral-boundary) <= 64eps(T)*max(magnitude, floatmin(T)) ||
+        throw(ArgumentError("incompatible Neumann Poisson data: integral(f) must equal θ₀*(u₊-u₋)"))
+    return nothing
 end

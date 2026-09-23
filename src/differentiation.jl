@@ -76,8 +76,7 @@ Return `da/dy` at `y = -1` for `side = :left`, or at `y = +1` for
 `side = :right`, without modifying `a` or forming its derivative expansion.
 
 Use `T_n'(+1) = n²` and `T_n'(-1) = (-1)^(n+1)*n²`. Derivatives refer to
-the reference interval `[-1, 1]`; multiply by `2/(b-a)` when mapping to a
-physical interval `[a, b]`. Throw `ArgumentError` for any other `side`.
+the interval `[-1, 1]`. Throw `ArgumentError` for any other `side`.
 """
 function Base.diff(   a::AbstractVector{T},
                   side::Symbol) where {T}

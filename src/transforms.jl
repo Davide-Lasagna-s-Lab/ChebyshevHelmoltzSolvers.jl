@@ -4,35 +4,19 @@ export chebpoints, chebcoeffs, chebvalues
 #///                         CHEBYSHEV LOBATTO POINTS                        ///#
 #//////////////////////////////////////////////////////////////////////////////#
 
-# Reference-to-physical derivative scale. Solvers keep this scalar rather
-# than mapped coefficient arrays; all systems in a batch share one interval.
-function _intervalscale(a, b, ::Type{T}=Float64) where {T}
-    #///////////////////////////////// CHECKS /////////////////////////////////#
-    # An affine map needs finite, ordered endpoints and a usable scale.
-    isfinite(a) && isfinite(b) && a < b ||
-        throw(ArgumentError("interval endpoints must be finite with a < b"))
-    scale = T(2 / (b-a))
-    isfinite(scale) && scale > 0 ||
-        throw(ArgumentError("interval scale must be finite and positive"))
-    #//////////////////////////////////////////////////////////////////////////#
-
-    return scale
-end
-
 """
-    chebpoints(P::Integer; a=-1, b=1)
+    chebpoints(P::Integer)
 
-Return the `P+1` Chebyshev–Lobatto points on `[a, b]`, ordered from `b`
-to `a`. The polynomial degree `P` must be positive. Default to `[-1, 1]`.
+Return the `P+1` Chebyshev–Lobatto points on `[-1, 1]`, ordered from +1
+to -1. The polynomial degree `P` must be positive.
 """
-function chebpoints(P::Integer; a=-1, b=1)
+function chebpoints(P::Integer)
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # Both endpoints require a positive polynomial degree.
     P >= 1 || throw(ArgumentError("P must be positive"))
     #//////////////////////////////////////////////////////////////////////////#
 
-    _intervalscale(a, b)
-    return [a + (b-a)*(1 + cospi(j/P))/2 for j = 0:P]
+    return [cospi(j/P) for j = 0:P]
 end
 
 #//////////////////////////////////////////////////////////////////////////////#

@@ -5,11 +5,10 @@ export BatchedHelmoltzSolver
 #//////////////////////////////////////////////////////////////////////////////#
 
 """
-    BatchedHelmoltzSolver(P, B, T=Float64; neum=false, a=-1, b=1)
+    BatchedHelmoltzSolver(P, B, T=Float64; neum=false)
 
 Allocate storage for `B` independent problems `θ₀[s]*uₛ'' - θ₁[s]*uₛ = fₛ`
-on `[a, b]`, using precision `T`. All systems share this interval; operator
-coefficients and Neumann data refer to physical derivatives. `P ≥ 3` is the polynomial degree, so
+on `[-1, 1]`, using precision `T`. `P ≥ 3` is the polynomial degree, so
 there are `P + 1` coefficients per solution. The positive batch size `B` is
 stored as a type parameter; factors use `(system, coefficient)` storage.
 
@@ -19,31 +18,30 @@ eltype `T`. Construction only allocates storage;
 `update!` assembles and factorises the operators and checks their UL pivots.
 
 Boundary data are Dirichlet values by default, or positive-y derivatives at
-both walls when `neum=true`. Pure Neumann Poisson problems need a separate
-mean-mode treatment.
+both walls when `neum=true`. CPU batches support compatible pure Neumann
+Poisson systems with a zero-mean gauge, including batches mixing singular
+and nonsingular systems. Singular Neumann solves on CUDA are not supported.
 
 The batch owns no RHS workspace. With CUDA loaded, `Adapt.adapt(CuArray, h)`
 transfers its factors without changing precision. Updates subsequently
 assemble and factor in the existing CPU or GPU arrays.
 """
 struct BatchedHelmoltzSolver{T, B, Q<:BatchedQuasiTridiagonal{T, B}, R<:BatchedQuasiTridiagonal{T, B}, V<:AbstractVector{T}}
-    scale::T            # physical derivative scale 2/(b-a), shared by the batch
-     neum::Bool         # prescribe positive-y derivatives instead of wall values
-       Be::Q            # UL factors for the even Chebyshev coefficients, system first
-       Bo::R            # UL factors for the odd Chebyshev coefficients, system first
-    cache::NTuple{3, V} # integration weights (l, d, u), shared by all systems
+       neum::Bool         # prescribe positive-y derivatives instead of wall values
+         Be::Q            # UL factors for the even Chebyshev coefficients, system first
+         Bo::R            # UL factors for the odd Chebyshev coefficients, system first
+      cache::NTuple{3, V} # integration weights (l, d, u), shared by all systems
+    poisson::V         # θ₀ for each singular Neumann system; zero otherwise
 end
 
 function BatchedHelmoltzSolver(   P::Int,
                                   B::Int,
                                    ::Type{T}=Float64;
-                               neum::Bool=false, a=-1, b=1) where {T<:AbstractFloat}
+                                 neum::Bool=false) where {T<:AbstractFloat}
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # Both parity blocks must contain at least two coefficients.
     P ≥ 3 || throw(ArgumentError("P must be at least 3"))
     #//////////////////////////////////////////////////////////////////////////#
-
-    scale = _intervalscale(a, b, T)
 
     # Allocate B independent factor banks for each parity. Even degrees
     # include zero, giving one extra coefficient when P is even. update!
@@ -58,7 +56,7 @@ function BatchedHelmoltzSolver(   P::Int,
     u = T[p == 1 ? 0 : _β(p+2, P)/(4p*(p+1)) for p in 1:P]
     cache = (l, d, u)
 
-    return BatchedHelmoltzSolver(scale, neum, Be, Bo, cache)
+    return BatchedHelmoltzSolver(neum, Be, Bo, cache, zeros(T, B))
 end
 
 #//////////////////////////////////////////////////////////////////////////////#
@@ -67,10 +65,10 @@ end
 
 # Transfer factor banks and cached integration weights to the same device.
 function Adapt.adapt_structure(to, h::BatchedHelmoltzSolver)
-    return BatchedHelmoltzSolver(h.scale, h.neum,
+    return BatchedHelmoltzSolver(h.neum,
                                 Adapt.adapt(to, h.Be),
                                 Adapt.adapt(to, h.Bo),
-                                Adapt.adapt(to, h.cache))
+                                Adapt.adapt(to, h.cache), Adapt.adapt(to, h.poisson))
 end
 
 #//////////////////////////////////////////////////////////////////////////////#
@@ -111,18 +109,15 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
             throw(ArgumentError("operator coefficients must not alias the factors"))
     end
 
-    # Nonfinite coefficients and the singular Neumann mean mode are rejected
-    # before assembly. CUDA implements these predicates as device reductions.
-    all(isfinite, θ₀) && all(isfinite, θ₁) ||
-        throw(ArgumentError("operator coefficients must be finite"))
-    h.neum && any(iszero, θ₁) &&
-        throw(ArgumentError("the pure Neumann Poisson operator requires a separate mean-mode solve"))
+    # A second-order operator needs finite coefficients and nonzero θ₀.
+    all(isfinite, θ₀) && all(isfinite, θ₁) && all(!iszero, θ₀) ||
+        throw(ArgumentError("operator coefficients must be finite and θ₀ must be nonzero"))
     #//////////////////////////////////////////////////////////////////////////#
 
     # Assemble and factor each parity across contiguous systems. No scalar
     # wrappers or row views are constructed for individual operators.
-    _assemble_helmoltz!(h.Be, h.cache, θ₀, θ₁, 2, h.neum, h.scale); ul!(h.Be)
-    _assemble_helmoltz!(h.Bo, h.cache, θ₀, θ₁, 3, h.neum, h.scale); ul!(h.Bo)
+    _assemble_helmoltz!(h.Be, h.cache, θ₀, θ₁, 2, h.neum); ul!(h.Be)
+    _assemble_helmoltz!(h.Bo, h.cache, θ₀, θ₁, 3, h.neum); ul!(h.Bo)
 
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # UL is unpivoted: validate the new factors after every update before
@@ -142,26 +137,31 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
         throw(ArgumentError("the batch has a zero or nonfinite reciprocal UL pivot"))
     #//////////////////////////////////////////////////////////////////////////#
 
+    @inbounds @simd for s in 1:B
+        h.poisson[s] = h.neum && iszero(θ₁[s]) ? θ₀[s] : zero(T)
+    end
     return h
 end
 
 # Assemble the same entries as the scalar method, with systems in the
 # inner loop so each pass writes contiguous memory and can use SIMD.
 function _assemble_helmoltz!(Q::BatchedQuasiTridiagonal{T, B, M, Matrix{T}},
-                            cache, θ₀, θ₁, p₀, neum, scale) where {T, B, M}
+                            cache, θ₀, θ₁, p₀, neum) where {T, B, M}
     l, d, u = cache
+    # A singular even block temporarily fixes u₀=0 instead of the redundant
+    # derivative condition; solve! checks compatibility and fixes the mean.
     @inbounds for i in 1:M
         n = p₀ - 2 + 2*(i-1)
-        boundary = neum ? scale*n^2 : 1
+        boundary = neum ? n^2 : 1
         @simd for s in 1:B
-            Q.b[s, i] = boundary
+            Q.b[s, i] = neum && iszero(θ₁[s]) && p₀ == 2 ? (i == 1) : boundary
         end
     end
     @inbounds for i in 1:M-1
         p = p₀ + 2*(i-1)
         @simd for s in 1:B
             Q.l[s, i] = -θ₁[s]*l[p]
-            Q.dᵢ[s, i] = θ₀[s]*scale^2 + θ₁[s]*d[p]
+            Q.dᵢ[s, i] = θ₀[s] + θ₁[s]*d[p]
         end
         if i < M-1
             @simd for s in 1:B
@@ -186,7 +186,7 @@ fields at the call site. Real factors support real or complex data of matching
 precision.
 
 `u₊` and `u₋` are one-based vectors of length `B`. Entry `s` prescribes
-system `s`'s values at `b` and `a`, or positive-y derivatives when
+system `s`'s values at `+1` and `-1`, or positive-y derivatives when
 `neum=true`. They must not alias `u`. A custom constant-valued vector may
 supply homogeneous conditions without allocating boundary storage. Vectors
 must support indexing on the selected backend; for CUDA, any stored data
@@ -207,6 +207,8 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
                 u₊::AbstractVector,
                 u₋::AbstractVector) where {T, B, M, Q<:BatchedQuasiTridiagonal{T, B, M, Matrix{T}}}
     #///////////////////////////////// CHECKS /////////////////////////////////#
+    # Reject precision mismatches before assembling any output coefficients.
+    _check_precision(T, u, f)
     # CPU factors require host fields with strided storage.
     u isa StridedMatrix && f isa StridedMatrix ||
         throw(ArgumentError("CPU factors require strided CPU input and output matrices"))
@@ -237,6 +239,10 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
     end
     any(a -> Base.mightalias(u, a), h.cache) &&
         throw(ArgumentError("destination must not alias the integration weights"))
+    # Validate all singular systems before writing any destination row.
+    for s in 1:B
+        iszero(h.poisson[s]) || _check_neumann(view(f, s, :), h.poisson[s], u₊[s], u₋[s])
+    end
     #//////////////////////////////////////////////////////////////////////////#
 
     P = size(f, 2) - 1
@@ -244,7 +250,7 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
     @inbounds @simd for s in 1:B
         # Differentiation exchanges parity, swapping Neumann wall combinations.
         up, lo = u₊[s], u₋[s]
-        u[s, 1] = 0.5 * (h.neum ? up-lo : up+lo)
+        u[s, 1] = iszero(h.poisson[s]) ? 0.5 * (h.neum ? up-lo : up+lo) : zero(eltype(u))
         u[s, 2] = 0.5 * (h.neum ? up+lo : up-lo)
     end
     @inbounds for p in 2:P
@@ -257,5 +263,9 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
     # Parity views double the column stride while retaining contiguous systems.
     ldiv!(h.Be, view(u, :, 1:2:P+1))
     ldiv!(h.Bo, view(u, :, 2:2:P+1))
+    # Select the same zero-mean gauge as the scalar Poisson solve.
+    for s in 1:B
+        iszero(h.poisson[s]) || (u[s, 1] = -sum(u[s, n+1]/(1-n^2) for n in 2:2:P))
+    end
     return u
 end

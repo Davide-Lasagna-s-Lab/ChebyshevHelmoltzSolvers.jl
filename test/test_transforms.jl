@@ -23,7 +23,7 @@
     # Reproduce the README solves end to end: sampled source -> coefficients
     # -> tau solution -> physical values, compared with analytic polynomials.
     P = 16
-    y = [cospi(j/P) for j = 0:P]
+    y = chebpoints(P)
     h = HelmoltzSolver(P)
     update!(h, 1.0, 4.0)
     rhs = chebcoeffs(-6 .+ 4 .* y.^2)
@@ -33,6 +33,6 @@
     h = CoupledHelmoltzSolver(P)
     update!(h, (1.0, 0.0, 1.0, 0.0))
     rhs = chebcoeffs(fill(24.0, P+1))
-    solve!(h, rhs)
+    solve!(h, rhs, copy(rhs))
     @test chebvalues(rhs) ≈ (1 .- y.^2).^2 atol=2e-12
 end

@@ -7,7 +7,7 @@ module ChebyshevHelmoltzSolversCUDAExt
 using CUDA
 using ChebyshevHelmoltzSolvers: BatchedHelmoltzSolver, BatchedQuasiTridiagonal
 import ChebyshevHelmoltzSolvers: _ul_system!, solve!,
-                                update!, ul!
+                                update!, ul!, _check_precision
 import LinearAlgebra: ldiv!
 
 const CuBatchedQuasiTridiagonal{T, B, M} = BatchedQuasiTridiagonal{T, B, M, A} where {A<:CuArray{T, 2}}

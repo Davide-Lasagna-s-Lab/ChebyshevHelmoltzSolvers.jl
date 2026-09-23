@@ -123,11 +123,11 @@ end
 Solve `Q*x = rhs` from the previously computed factorisation `Q = U*L`.
 Overwrite `rhs` with `x` and return the same vector; preserve all factors.
 Call `ul!` before solving. The one-based RHS must have length `M`, the same
-element type as `Q`, and storage distinct from the factors.
+precision as `Q` (real or complex), and storage distinct from the factors.
 
 """
 function LinearAlgebra.ldiv!(Q::QuasiTridiagonal{T, M},
-                             rhs::AbstractVector{T}) where {T, M}
+                             rhs::AbstractVector{S}) where {T, M, S<:Union{T, Complex{T}}}
     #///////////////////////////////// CHECKS /////////////////////////////////#
     # The substitutions assume one-based indexing and exactly M coefficients.
     Base.require_one_based_indexing(rhs)

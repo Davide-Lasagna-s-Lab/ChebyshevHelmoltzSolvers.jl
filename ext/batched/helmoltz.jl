@@ -22,9 +22,8 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
             throw(ArgumentError("operator coefficients must not alias the factors"))
     end
 
-    # Nonfinite coefficients and the singular Neumann mean mode are rejected
-    # before assembly. CUDA implements these predicates as device reductions.
-    all(isfinite, θ₀) && all(isfinite, θ₁) ||
+    # A second-order operator needs finite coefficients and nonzero θ₀.
+    all(isfinite, θ₀) && all(isfinite, θ₁) && all(!iszero, θ₀) ||
         throw(ArgumentError("operator coefficients must be finite"))
     h.neum && any(iszero, θ₁) &&
         throw(ArgumentError("the pure Neumann Poisson operator requires a separate mean-mode solve"))
@@ -48,6 +47,7 @@ function update!( h::BatchedHelmoltzSolver{T, B, Q},
     end
     #//////////////////////////////////////////////////////////////////////////#
 
+    fill!(h.poisson, zero(T))
     return h
 end
 
@@ -73,12 +73,12 @@ end
     @inbounds begin
         for i in 1:M
             n = p₀ - 2 + 2*(i-1)
-            Q.b[s, i] = h.neum ? h.scale*n^2 : 1
+            Q.b[s, i] = h.neum ? n^2 : 1
         end
         for i in 1:M-1
             p = p₀ + 2*(i-1)
             Q.l[s, i] = -θ₁*l[p]
-            Q.dᵢ[s, i] = θ₀*h.scale^2 + θ₁*d[p]
+            Q.dᵢ[s, i] = θ₀ + θ₁*d[p]
             i < M-1 && (Q.u[s, i] = -θ₁*u[p])
         end
     end
@@ -95,6 +95,10 @@ function solve!( h::BatchedHelmoltzSolver{T, B, Q},
                 u₊::AbstractVector,
                 u₋::AbstractVector) where {T, B, Q<:CuBatchedQuasiTridiagonal{T, B}}
     #///////////////////////////////// CHECKS /////////////////////////////////#
+    # Singular CPU batches cannot yet be solved on device.
+    all(iszero, h.poisson) || throw(ArgumentError("singular Neumann Poisson is currently CPU-only"))
+    # Reject precision mismatches before launching a kernel.
+    _check_precision(T, u, f)
     # CUDA factors require device input and output fields.
     u isa CUDA.StridedCuMatrix && f isa CUDA.StridedCuMatrix ||
         throw(ArgumentError("CUDA factors require CUDA input and output matrices"))

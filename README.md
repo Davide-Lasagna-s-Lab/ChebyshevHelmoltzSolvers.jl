@@ -7,7 +7,7 @@
 [![CI](https://github.com/Davide-Lasagna-s-Lab/ChebyshevHelmoltzSolvers.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/Davide-Lasagna-s-Lab/ChebyshevHelmoltzSolvers.jl/actions/workflows/CI.yml)
 
 ChebyshevHelmoltzSolvers.jl solves one-dimensional Helmholtz and factored
-fourth-order boundary-value problems on a finite interval using the
+fourth-order boundary-value problems on `[-1, 1]` using the
 **Chebyshev tau method**: it expands the solution in Chebyshev polynomials,
 imposes the differential equation on the lower-degree residual coefficients,
 and uses the remaining equations to enforce boundary conditions
@@ -66,55 +66,13 @@ transform by `P`, and halves the coefficients of degrees `0` and `P`. The input 
 
 | Operation | Purpose |
 | --- | --- |
-| `chebpoints(P; a=-1, b=1)` | Return the $P+1$ Chebyshev–Lobatto points from `b` to `a`. |
+| `chebpoints(P)` | Return the $P+1$ Chebyshev–Lobatto points from `+1` to `-1`. |
 | `chebcoeffs(values)` | Convert descending Lobatto samples into ordinary Chebyshev coefficients. |
 | `chebvalues(a)` | Evaluate coefficients at descending Lobatto points. |
 | `diff!(a)` | Differentiate Chebyshev coefficients in place on [-1, 1]. |
 | `diff!(out, a)` | Differentiate into distinct, non-aliasing output storage. |
 | `diff(a, :left)` | Evaluate the derivative at -1 without a derivative workspace. |
 | `diff(a, :right)` | Evaluate the derivative at +1. |
-
-### Physical intervals
-
-All solver constructors accept `a` and `b` keywords, defaulting to `-1` and
-`1`. Use the same endpoints when constructing collocation points:
-
-```julia
-P = 16
-a, b = 2.0, 5.0
-y = chebpoints(P; a, b)
-h = HelmoltzSolver(P; a, b)
-update!(h, 1.0, 4.0)
-
-# u(y) = (y-a)(b-y), hence u''(y) = -2, with u(a) = u(b) = 0.
-f = chebcoeffs(-2 .- 4 .* (y .- a) .* (b .- y))
-u = similar(f)
-solve!(h, u, f)
-chebvalues(u)  # ≈ (y .- a) .* (b .- y)
-```
-
-The coefficients now represent $T_n(\xi)$, where
-
-$$
-\xi=\frac{2y-a-b}{b-a},\qquad
-\frac{\mathrm{d}}{\mathrm{d}y}=\frac{2}{b-a}\frac{\mathrm{d}}{\mathrm{d}\xi}.
-$$
-
-The solver internally replaces $\theta_0$ by $\theta_0(2/(b-a))^2$.
-Pass **physical** operator coefficients without manual scaling.
-For `neum=true`, pass physical derivatives $u'(b)$ and $u'(a)$, in that
-order; the boundary rows include the same first-derivative scale.
-Dirichlet data and the forcing are unchanged.
-
-`CoupledHelmoltzSolver(P; a, b)` applies the map to both operators.
-`BatchedHelmoltzSolver(P, B; a, b)` uses one interval shared by all systems,
-on both CPU and GPU. Endpoints must be finite and satisfy $a<b$.
-
-The transforms `chebcoeffs` and `chebvalues` need no interval argument:
-their input and output ordering stays from `b` to `a`. The standalone
-`diff!`, `diff2!` and endpoint `diff` utilities differentiate with respect
-to the reference coordinate $\xi$; multiply their results by $2/(b-a)$
-or $(2/(b-a))^2$ for physical first or second derivatives.
 
 ## Scalar Helmholtz solver
 
@@ -126,7 +84,7 @@ $$
 u(1)=u_+, \qquad u(-1)=u_-.
 $$
 
-`HelmoltzSolver(P, T=Float64; a=-1, b=1)` allocates factors and integration weights for degree
+`HelmoltzSolver(P, T=Float64)` allocates factors and integration weights for degree
 `P ≥ 3`, with `P + 1` coefficients. Call `update!` before solving and whenever
 the operator coefficients change. Right-hand sides and boundary values can
 change without another update.
@@ -154,11 +112,13 @@ chebvalues(u)  # ≈ 1 .- y.^2
 ```
 
 **Boundary arguments are upper then lower:** `solve!(h, u, f, u₊, u₋)`.
-Scalar factors and coefficient vectors are real-valued (`Float32` or `Float64`).
-The batched solver additionally supports complex coefficient matrices.
+Scalar and batched factors are real-valued (`Float32` or `Float64`); both
+support real or complex coefficient arrays at the same precision. Input and
+output arrays must have matching element types. All `solve!(solver, u, f, ...)`
+methods preserve `f` and return `u`; all `update!` methods return the solver.
 Use `HelmoltzSolver(P; neum=true)` to prescribe positive-y derivatives at both
-walls. Pure Neumann Poisson (`θ₁=0`) is singular and is rejected; handle its
-compatibility condition and additive constant separately.
+walls. Pure Neumann Poisson (`θ₁=0`, `θ₀≠0`) is supported on the CPU with
+compatibility validation and a zero-mean solution, as described below.
 The scalar tau equations are imposed through degree `P - 2`; the two
 highest right-hand-side coefficients do not enter the solve.
 
@@ -189,8 +149,7 @@ The amplitudes $\tau_{P-1}$ and $\tau_P$ are residual coefficients, not
 additional inputs. The two boundary conditions are satisfied by the
 polynomial solution, while these highest residual components are left
 unconstrained. This also explains why the last two forcing coefficients
-do not affect the computed solution. The same construction applies on a
-mapped interval using $T_n(\xi)$ and the physical derivative scale.
+do not affect the computed solution.
 See [Canuto et al. (2006)](https://doi.org/10.1007/978-3-540-30726-6)
 for the general tau framework.
 
@@ -220,8 +179,34 @@ $$
 \int_{-1}^{1}f(y)\,\mathrm{d}y=\theta_0(u_+-u_-),
 $$
 
-and would remain undetermined up to an additive constant. This singular case
-is outside the solver's supported Neumann interface.
+and remains undetermined up to an additive constant. CPU scalar and batched
+solvers check this compatibility condition and select the unique solution with
+
+$$
+\frac{1}{2}\int_{-1}^{1}u(y)\,\mathrm{d}y
+=\sum_{\substack{n=0\\n\text{ even}}}^{P}\frac{\widehat u_n}{1-n^2}=0.
+$$
+
+The compatibility check uses the **retained forcing** through degree `P-2`,
+not the two discarded tau coefficients. Its tolerance is proportional to
+machine precision and the magnitudes of the integral and wall contributions.
+Incompatible forcing raises `ArgumentError` before modifying the destination;
+it is not silently corrected. Internally the redundant even boundary equation
+is replaced by a temporary constant-coefficient gauge, then the constant is
+shifted to enforce zero mean. The odd boundary equation is retained.
+
+```julia
+h = HelmoltzSolver(16; neum=true)
+update!(h, 1.0, 0.0)
+y = chebpoints(16)
+f = chebcoeffs(6 .* y .+ 2)
+u = similar(f)
+solve!(h, u, f, 5.0, 1.0)
+chebvalues(u)  # ≈ y.^3 .+ y.^2 .- 1/3
+```
+
+CPU batches may mix singular and shifted Neumann systems. CUDA singular
+Neumann support is deferred; its update/solve methods reject that case.
 
 ## Coupled Helmholtz solver
 
@@ -263,9 +248,9 @@ all four conditions on $v$ hold.
 First compute a particular pair with convenient homogeneous Dirichlet data:
 
 $$
-\mathcal{L}_1u_p=f,\quad u_p(a)=u_p(b)=0,
+\mathcal{L}_1u_p=f,\quad u_p(-1)=u_p(1)=0,
 \qquad
-\mathcal{L}_2v_p=u_p,\quad v_p(a)=v_p(b)=0.
+\mathcal{L}_2v_p=u_p,\quad v_p(-1)=v_p(1)=0.
 $$
 
 This generally leaves nonzero endpoint derivatives of $v_p$. Construct two
@@ -273,12 +258,12 @@ homogeneous response pairs, labelled $+$ and $-$:
 
 $$
 \mathcal{L}_1u_\pm=0,\qquad
-\mathcal{L}_2v_\pm=u_\pm,\qquad v_\pm(a)=v_\pm(b)=0,
+\mathcal{L}_2v_\pm=u_\pm,\qquad v_\pm(-1)=v_\pm(1)=0,
 $$
 
 $$
-(u_+(b),u_+(a))=(1,0),\qquad
-(u_-(b),u_-(a))=(0,1).
+(u_+(1),u_+(-1))=(1,0),\qquad
+(u_-(1),u_-(-1))=(0,1).
 $$
 
 All these equations are solved with the same discrete tau operators.
@@ -293,20 +278,18 @@ The remaining derivative conditions reduce to
 
 $$
 \underbrace{\begin{pmatrix}
-v_+'(b)&v_-'(b)\\
-v_+'(a)&v_-'(a)
+v_+'(1)&v_-'(1)\\
+v_+'(-1)&v_-'(-1)
 \end{pmatrix}}_{A}
 \begin{pmatrix}\delta_+\\\delta_-\end{pmatrix}
-=-\begin{pmatrix}v_p'(b)\\v_p'(a)\end{pmatrix}.
+=-\begin{pmatrix}v_p'(1)\\v_p'(-1)\end{pmatrix}.
 $$
 
 Each column of $A$ measures the effect of one unit endpoint
 value of $u$ on the two endpoint derivatives of $v$—hence the name
-*influence matrix*. On a mapped interval the common derivative scale cancels
-between both sides, so the implementation can evaluate this correction
-using reference-coordinate derivatives.
+*influence matrix*. All derivatives refer to the common interval `[-1, 1]`.
 
-The responses and $A$ depend on the operators and interval,
+The responses and $A$ depend on the operators,
 but not on $f$. `update!` computes them once; each subsequent `solve!`
 requires only the two particular Helmholtz solves, a $2\times2$ linear solve,
 and the response combination. This boundary-correction construction is
@@ -325,16 +308,19 @@ solver = CoupledHelmoltzSolver(P)
 update!(solver, (1.0, 0.0, 1.0, 0.0))
 
 y = chebpoints(P)
-rhs = chebcoeffs(fill(24.0, length(y)))
-solve!(solver, rhs)
+f = chebcoeffs(fill(24.0, length(y)))
+u = similar(f)
+solve!(solver, u, f)  # preserves f
 
-v = chebvalues(rhs)  # v ≈ (1 .- y.^2).^2
+v = chebvalues(u)  # v ≈ (1 .- y.^2).^2
 
 # v = 3T₀/8 - T₂/2 + T₄/8
-# rhs[1] ≈ 0.375, rhs[3] ≈ -0.5, rhs[5] ≈ 0.125
+# u[1] ≈ 0.375, u[3] ≈ -0.5, u[5] ≈ 0.125
 ```
 
-The source storage must be distinct from the solver's internal workspaces.
+Use `CoupledHelmoltzSolver(P, ComplexF64)` for complex Fourier coefficients;
+the underlying factors remain real. Source and destination must be disjoint
+and distinct from the solver's internal workspaces.
 The intermediate `u` is not retained. The influence matrix must be nonsingular;
 use degree at least four to represent a nonzero solution with four homogeneous
 wall conditions.
@@ -350,7 +336,7 @@ $$
 
 Each system has its own coefficients and boundary data; systems are not coupled.
 
-`BatchedHelmoltzSolver(P, B, T=Float64; neum=false, a=-1, b=1)` allocates storage for
+`BatchedHelmoltzSolver(P, B, T=Float64; neum=false)` allocates storage for
 `B > 0` independent operators of degree `P ≥ 3`, with real factors of type `T`
 and real or complex right-hand sides. Call `update!(h, θ₀, θ₁)` before solving
 and whenever the operator coefficients change. `θ₀` and `θ₁` are vectors of
@@ -741,11 +727,14 @@ with its homogeneous problems paid for at
 each concurrent task. Scalar and batched factors can be shared by solves
 with disjoint destination arrays, provided no concurrent `update!` occurs.
 
-UL factorisation has no pivoting. Batched Helmholtz `update!` rejects zero or
-nonfinite pivots and nonfinite stored reciprocals. Construction only allocates
-storage; call `update!` before solving. The scalar factorisation has no
-singularity check. The chosen scalar operators must have nonzero pivots with
-finite reciprocals, and the coupled influence system must be invertible.
+UL factorisation has no pivoting. Scalar and batched `update!` reject zero or
+nonfinite reciprocal pivots. Scalar `solve!` also checks the factors before
+modifying the output. Construction only allocates storage: call `update!`
+before solving. A nonsingular negative-shift matrix can still cause an
+unpivoted breakdown (for example `P=4`, `θ₀=1`, `θ₁=-6`); an error is raised,
+not a pivoted fallback. After a failed factorisation, perform a successful
+`update!` before reusing the solver. Coefficients must be finite with `θ₀≠0`.
+The coupled influence matrix must also be invertible.
 Multiplication by a stored reciprocal can round differently from direct
 division; a finite nonzero pivot can also have an overflowing reciprocal.
 Floating-point conditioning and range still limit accuracy as the degree or
@@ -764,7 +753,10 @@ differentiation, wall derivatives, UL reconstruction and repeated solves,
 reciprocal-pivot refresh and preservation, analytic scalar and coupled solutions,
 real and complex coefficients,
 single and double precision, odd/even degrees, operator updates and
-preservation of cached homogeneous responses. Tests need only Julia's
+preservation of cached homogeneous responses. Additional tests cover an
+independent dense tau operator, convergence through degree 512, near-singular
+shifted Neumann systems, compatible Poisson gauges, and failure before output
+mutation. See [the test guide](test/README.md). Tests need only Julia's
 `Test` standard library in addition to the package dependencies.
 
 ## References
@@ -790,3 +782,7 @@ preservation of cached homogeneous responses. Tests need only Julia's
   Historical reference for influence-matrix treatment of spectral boundary conditions.
 
 The logo adapts the illustration and visual identity of FDHelmoltzSolver.jl.
+
+## Licence
+
+MIT licence. Copyright © 2026 Davide Lasagna. See [LICENSE](LICENSE).

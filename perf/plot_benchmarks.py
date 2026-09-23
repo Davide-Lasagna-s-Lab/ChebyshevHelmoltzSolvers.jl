@@ -1,12 +1,14 @@
 """Plot recorded timings; never rerun or modify the numerical benchmark."""
 from pathlib import Path
 import csv
+import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 root = Path(__file__).resolve().parent
-with (root / "results/helmoltz-cpu.csv").open() as stream:
+source = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "results/helmoltz-cpu.csv"
+with source.open() as stream:
     rows = list(csv.DictReader(stream))
 data = {(int(r["Ny"]), int(r["systems"]), r["mode"]): float(r["minimum_us"]) for r in rows}
 ny = sorted({k[0] for k in data})
@@ -37,7 +39,7 @@ axes[1].axhline(1, color="#616161", lw=0.8, ls="--")
 axes[1].legend(frameon=False, fontsize=8, ncol=2)
 fig.suptitle("CPU Helmholtz solves · Float64 · one Julia thread")
 for suffix in ("png", "svg"):
-    fig.savefig(root / f"results/helmoltz-solves.{suffix}")
+    fig.savefig(source.parent / f"helmoltz-solves.{suffix}")
 plt.close(fig)
 
 fig, axes = plt.subplots(1, 2, figsize=(9, 3.5), layout="constrained")
@@ -62,9 +64,9 @@ axes[1].axhline(1, color="#616161", lw=0.8, ls="--")
 axes[1].legend(frameon=False, fontsize=8, ncol=2)
 fig.suptitle("Operator updates include assembly, factorisation and validation")
 for suffix in ("png", "svg"):
-    fig.savefig(root / f"results/helmoltz-updates.{suffix}")
+    fig.savefig(source.parent / f"helmoltz-updates.{suffix}")
 plt.close(fig)
 
 # Keep Matplotlib's generated SVG path data free of trailing whitespace.
-for path in (root / "results").glob("helmoltz-*.svg"):
+for path in source.parent.glob("helmoltz-*.svg"):
     path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
