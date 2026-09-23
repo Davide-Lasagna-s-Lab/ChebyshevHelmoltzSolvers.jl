@@ -1,0 +1,5 @@
+Precompiling packages...
+    884.8 ms  ✓ ChebyshevHelmoltzSolvers
+  1 dependency successfully precompiled in 1 seconds. 41 already precompiled.
+Test Summary:            |  Pass  Total   Time
+ChebyshevHelmoltzSolvers | 15724  15724  48.8s

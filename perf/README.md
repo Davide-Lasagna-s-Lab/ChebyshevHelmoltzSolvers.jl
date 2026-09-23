@@ -1,12 +1,71 @@
 # Benchmarks
 
 Run from the package root with an otherwise idle machine. Scripts warm up
-specialized code before timing, validate results against a scalar reference,
-and exclude compilation latency. Stored results were
-collected on an Apple M5 MacBook Air with Julia 1.12.6, using one Julia and one
-BLAS thread. They do not describe an A100 or a complete DNS time step.
+specialized code before timing and exclude compilation latency. The scalar
+comparison checks its scalar reference; the device benchmark checks CUDA
+results against the batched CPU result. The current sweep measures an Apple
+M5 MacBook Air and an IRIDIS X A100 80 GB PCIe compute node. CPU measurements
+use one Julia and one BLAS thread. These are solver timings, not complete DNS
+time steps.
 
-## Complete Helmholtz solves
+## Batched CPU and GPU benchmarks
+
+[Recorded results at `92072b1`](results/92072b1/README.md) include raw timings,
+environment records, test logs, and figures for the current implementation.
+
+```sh
+CHEB_SOURCE_COMMIT=$(git rev-parse HEAD) CHEB_BENCH_SAMPLES=500 \
+  julia --startup-file=no --threads=1 --project=. \
+  perf/benchmark_devices.jl cpu local-cpu.csv
+
+CHEB_SOURCE_COMMIT=$(git rev-parse HEAD) CHEB_BENCH_SAMPLES=500 \
+  julia --startup-file=no --threads=1 --project=test/cuda \
+  perf/benchmark_devices.jl cuda a100.csv
+
+python3 perf/plot_devices.py local-cpu.csv
+python3 perf/plot_devices.py a100.csv
+```
+
+The shared harness measures **both batched Helmholtz and batched coupled
+Helmholtz solvers**, using native `(system, coefficient)` ComplexF64 fields.
+It defaults to `Ny = 8,16,32,64,128,256,512,1024` and
+`B = 64,256,1024,4096,16384,65536`. Override comma-separated lists through
+`CHEB_BENCH_NY`, `CHEB_BENCH_BATCHES`, and `CHEB_BENCH_KINDS`
+(`helmholtz,coupled`). `CHEB_BENCH_SAMPLES` controls the sample count.
+
+Each reported time is the **minimum of 500 warmed per-call sample averages**.
+Small operations repeat within a sample for approximately 1 ms to reduce
+timer noise. Large operations use one call per sample. This estimates the
+least-interrupted execution time, not typical latency or a confidence interval.
+More samples give more opportunities to observe a low-interference run;
+they do not remove thermal, clock, or memory-bandwidth differences.
+
+GPU runs also measure the batched CPU implementation **on the same compute
+node**. Their speedup is that CPU minimum divided by the GPU minimum, not a
+ratio against a different machine. Local Mac measurements are reported
+separately. CPU runs use one Julia and one BLAS thread; CPU batching uses
+SIMD across systems. GPU timings synchronize before and after the sample,
+include public API validation and kernel launches, and exclude solver/field
+construction, compilation and host/device transfers. Any internal allocation
+performed by the measured call is included. Keep data on the GPU for this use case.
+Coupled updates include both factorisations and rebuilding the cached influence
+responses. GPU results are checked against CPU results before timing.
+
+CSV times are seconds **per whole batch**; plots divide by `B`. Each raw run has
+an environment sidecar recording the source commit, hardware, Julia/CUDA
+versions, sample count, and benchmark script hash. The combined A100 CSV
+identifies the raw source file for each row. Output files are never
+overwritten. Large coupled cases require several GiB of host and device
+memory; the largest coupled case uses roughly 9 GiB for solver/field arrays
+alone. Use a host with at least 32 GB RAM for the full sweep, or select smaller
+cases. Avoid interpreting swap-limited measurements as solver throughput.
+
+The recorded local sweep omits only the coupled `Ny=1024, B=65536` case:
+it exceeded comfortable memory capacity on the 16 GB Mac and was stopped.
+Its [memory-limit record](results/92072b1/local-memory-limit.txt) explains the
+missing point. The compute-node sweep includes the full size range.
+
+## Historical scalar-versus-batched comparison
 
 ```sh
 julia --startup-file=no --threads=1 --project perf/benchmark_helmoltz.jl
@@ -71,19 +130,21 @@ The benchmark compares full CPU and GPU batched ComplexF64 solves, with
 synchronization around each timed batch. Matrices are reshaped at the call
 site; factors, fields and stored wall vectors are transferred before timing.
 
-The CUDA extension was successfully loaded locally, but `CUDA.functional()`
-was false. **No GPU execution, numerical validation or A100 timings are claimed.**
-Run these commands on the A100 before relying on the GPU path.
+The CUDA tests have passed on an A100 80 GB PCIe with scalar indexing
+disabled. The target includes 7,458 CUDA checks plus CPU references. Singular
+Neumann Poisson batches remain unsupported on CUDA.
 
 ## Source provenance
 
-New full-solver runs require committed solver and benchmark sources and default
-to `results/<full-commit>/helmoltz-cpu.csv`. `environment.txt` records the measured
-commit and execution environment. Existing CSV files are not overwritten: supply
+Commit solver and benchmark sources before recording a comparison. The device
+harness takes an explicit output path and records `CHEB_SOURCE_COMMIT`; set
+it to the measured revision as shown above. The historical scalar-comparison
+harness defaults to `results/<full-commit>/helmoltz-cpu.csv`. Environment
+sidecars record the measured commit and execution environment. Existing CSV files are not overwritten: supply
 a fresh output path for repeated measurements at the same commit. Version tags
 are not required; an ordinary source commit is sufficient.
 
 The earlier results are also archived under `results/e172199923eec97924d8e9a8040277813a2b0ff2/`.
 Their provenance file distinguishes the commit that stored the results from an
 unrecorded measurement revision. They must not be presented as measurements of
-newer solver changes. The GPU benchmark and validation remain deferred.
+newer solver changes. The historical results do not describe the new coupled solver.

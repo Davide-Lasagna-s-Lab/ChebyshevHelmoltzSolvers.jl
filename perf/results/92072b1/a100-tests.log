@@ -1,0 +1,67 @@
+WARNING: failed to select UTF-8 encoding, using ASCII
+Precompiling packages...
+Info Given ChebyshevHelmoltzSolvers was explicitly requested, output will be shown live
+WARNING: failed to select UTF-8 encoding, using ASCII
+   1157.3 ms  ✓ ChebyshevHelmoltzSolvers
+  1 dependency successfully precompiled in 2 seconds. 41 already precompiled.
+  1 dependency had output during precompilation:
+┌ ChebyshevHelmoltzSolvers
+│  [Output was shown above]
+└
+Precompiling packages...
+Info Given ChebyshevHelmoltzSolversCUDAExt was explicitly requested, output will be shown live
+WARNING: failed to select UTF-8 encoding, using ASCII
+   5588.9 ms  ✓ ChebyshevHelmoltzSolvers → ChebyshevHelmoltzSolversCUDAExt
+  1 dependency successfully precompiled in 6 seconds. 115 already precompiled.
+  1 dependency had output during precompilation:
+┌ ChebyshevHelmoltzSolvers → ChebyshevHelmoltzSolversCUDAExt
+│  [Output was shown above]
+└
+CUDA toolchain:
+- runtime 13.4.0, artifact installation
+- driver 595.71.5 for CUDA 13.3, forward-compatible
+- compiler 13.4.92, artifact installation
+
+CUDA libraries:
+- cuBLAS: 13.8.0
+- cuSPARSE: 12.8.6
+- cuSOLVER: 12.3.4
+- cuFFT: 12.4.0
+- cuRAND: 10.4.4
+- CUPTI: 2026.3.1 (API 13.4.1)
+- NVML: 13.0.0+595.71.5
+
+Julia packages:
+- CUDACore: 6.4.0
+- GPUArrays: 11.5.14
+- GPUCompiler: 2.8.1
+- KernelAbstractions: 0.9.42
+- CUDA_Driver_jll: 13.3.5+0
+- CUDA_Compiler_jll: 0.6.3+1
+- CUDA_Runtime_jll: 0.25.0+1
+- NVPTX_LLVM_Backend_jll: 23.1.2+0
+
+Toolchain:
+- Julia: 1.12.4
+- LLVM: 18.1.7
+
+1 device:
+  0: NVIDIA A100 80GB PCIe (sm_80, 79.247 GiB / 80.000 GiB available)
+     compiles to sm_80 / PTX 9.4 (LLVM: sm_80 / PTX 9.2)
+Test Summary:          | Pass  Total  Time
+Batched Helmholtz: CPU |  243    243  9.4s
+Test Summary:                                     | Pass  Total  Time
+Batched Helmholtz CPU updates and argument checks |   34     34  1.8s
+Test Summary:              | Pass  Total  Time
+Batched update allocations |    4      4  0.4s
+Test Summary:           | Pass  Total   Time
+Batched Helmholtz: CUDA |  243    243  16.1s
+Test Summary:   | Pass  Total   Time
+CUDA batched UL |  240    240  16.7s
+Test Summary:                      | Pass  Total  Time
+CUDA updates and backend contracts |   15     15  7.2s
+Test Summary:        | Pass  Total   Time
+Batched coupled: CPU | 6960   6960  12.9s
+Test Summary:         | Pass  Total   Time
+Batched coupled: CUDA | 6960   6960  48.2s
+GPU TESTS PASSED

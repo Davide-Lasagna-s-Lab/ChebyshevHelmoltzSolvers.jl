@@ -1,0 +1,9 @@
+UTC: 2026-09-23T15:53:31.692
+Source commit: 92072b170312604ed4f60cfcfcca4d5a08084af5
+Julia: 1.12.6; CPU: Apple M5
+Host: D7FHKN632L; Slurm: none
+Julia/BLAS threads: 1/1; ComplexF64; minimum of 500 warmed samples
+A sample averages repeated calls for >= approximately 1ms; includes public API checks.
+GPU timings include synchronization; exclude transfers and allocation.
+Ny: [8, 16, 32, 64, 128, 256, 512, 1024]; B: [64, 256, 1024, 4096, 16384, 65536]; solvers: SubString{String}["helmholtz", "coupled"]
+Script SHA256: 0bc4d44a153258e9200e9d85530e0005f5b9ce697bdc1db46c1e8ceeb7701773

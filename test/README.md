@@ -14,7 +14,7 @@ live in `helpers.jl`; they are not part of the package API.
 | `test_differentiation.jl`, `test_transforms.jl` | Coefficient conventions, endpoint derivatives, views, transforms and examples. |
 | `test_quasitridiag.jl`, `batched/quasitridiag.jl` | Factor reconstruction, substitution, precision, repeated solves and batched layout. |
 | `test_helmoltz.jl`, `batched/helmoltz.jl` | Manufactured solutions, both parities and boundary types, tau truncation, factor reuse and allocations. |
-| `test_coupled.jl` | Clamped fourth-order solutions, real/complex workspaces and cached influence responses. |
+| `test_coupled.jl`, `batched/coupled.jl` | Clamped fourth-order solutions, real/complex workspaces and cached influence responses. |
 | `test_contracts.jl` | Precision and storage contracts, uninitialised/broken factors, recovery after failed updates and fixed-domain API. |
 | `test_poisson.jl` | Neumann compatibility, zero-mean gauge, incompatible data and mixed singular/shifted CPU batches. |
 | `test_accuracy.jl` | Independent dense tau reference, normalized residuals, spectral convergence, high degree and near-singular shifts. |
@@ -32,6 +32,20 @@ Allocation tests warm methods before measurement. Timing comparisons belong in
 ## CUDA
 
 GPU tests remain separate in `cuda/` and require a functional NVIDIA device.
-They are not part of the CPU CI claim. GPU execution and singular Neumann support
-will be validated separately on the A100; no device results are inferred from
-CPU tests.
+They are not part of the CPU CI claim. Run them with:
+
+```sh
+julia --startup-file=no --project=test/cuda -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
+julia --startup-file=no --project=test/cuda test/cuda/runtests.jl
+```
+
+The suite has passed on an A100 80 GB PCIe with `CUDA.allowscalar(false)`.
+Shared manufactured cases test Float32/Float64 and complex fields, both
+parities, operator updates and preservation of forcing and cached responses.
+The coupled cases enforce all four clamped wall conditions. Separate tests
+exercise parity views, batches crossing block boundaries and mixed-backend
+rejection. CPU references are included in the CUDA target.
+
+Singular Neumann Poisson batches remain CPU-only; shifted Neumann systems
+are tested on both backends. Hardware, source revision and successful logs
+are stored with the benchmark results in `perf/results/`.

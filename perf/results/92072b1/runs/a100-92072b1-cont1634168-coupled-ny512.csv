@@ -1,0 +1,2 @@
+solver,Ny,systems,samples,cpu_solve_seconds,cpu_update_seconds,gpu_solve_seconds,gpu_update_seconds,solve_speedup,update_speedup
+coupled,512,65536,500,1.15878944,3.24862496,0.007730832,0.022937525,149.891944,141.629272

@@ -1,0 +1,7 @@
+The final local case (coupled, Ny=1024, B=65536) was stopped with SIGINT
+before its CSV row was written. The other 95 configurations completed.
+The Apple M5 MacBook Air has 16 GiB of RAM. At the final case, macOS reported
+2710.94 MiB of swap in use (previously 0.25 MiB), 206304 compressed-memory
+pages of 16384 bytes, and Julia RSS 8274592 KiB. The active working set was
+under memory pressure. No timing from this case is reported or extrapolated.
+The same configuration remains included in the compute-node CPU/GPU sweep.

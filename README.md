@@ -398,9 +398,40 @@ which include the boundary equation. Raw Chebyshev forcing should instead go
 through `BatchedHelmoltzSolver`. The batch size is encoded in both batched types. `BatchedQuasiTridiagonal`
 also encodes the matrix size `M`; both sizes stay fixed for its lifetime.
 
+## Batched coupled Helmholtz solves
+
+`BatchedCoupledHelmoltzSolver` applies the same influence-matrix method to
+independent fourth-order problems. Each row stores one system, each column
+one Chebyshev coefficient, exactly as for `BatchedHelmoltzSolver`.
+The four operator coefficients are vectors, so every system may have a
+different pair of Helmholtz operators:
+
+$$
+(\theta_{0,s}D^2-\theta_{1,s})(\theta_{2,s}D^2-\theta_{3,s})u_s=f_s,
+\qquad u_s(\pm1)=u_s'(\pm1)=0.
+$$
+
+```julia
+B, P = 256, 32
+h = BatchedCoupledHelmoltzSolver(P, B, ComplexF64)
+θs = (ones(B), zeros(B), ones(B), zeros(B))
+update!(h, θs)                         # D⁴u = f in this example
+f = zeros(ComplexF64, B, P+1)
+f[:, 1] .= 24                         # f(y)=24
+u = similar(f)
+solve!(h, u, f)                        # u(y)=(1-y²)²; f is preserved
+```
+
+`update!` factors both operator banks and caches the two homogeneous
+responses and inverse 2×2 influence matrix for every system. Each `solve!`
+then needs only two particular Helmholtz solves and a wall-slope correction.
+It reuses the allocated workspaces. CPU correction loops run across
+contiguous systems for SIMD; the CUDA correction assigns one system to each
+thread. Do not use the same solver concurrently from multiple tasks or streams.
+
 ## GPU Helmholtz solves
 
-The following example continues from the CPU setup above.
+The following example creates and transfers a complete Helmholtz batch.
 
 CUDA support is an optional package extension. Install
 [CUDA.jl](https://cuda.juliagpu.org/stable/installation/overview/) in your Julia
@@ -408,7 +439,14 @@ environment together with `Adapt` (`Pkg.add(["CUDA", "Adapt"])`), and load
 them before using device arrays:
 
 ```julia
-using CUDA, Adapt
+using CUDA, Adapt, ChebyshevHelmoltzSolvers
+
+B, P = 256, 32
+h = BatchedHelmoltzSolver(P, B)
+update!(h, ones(B), ones(B))       # u″ - u = f
+rhs = zeros(ComplexF64, B, P+1)
+rhs[:, 1] .= 1                   # f(y)=1
+bc = zeros(B)                    # homogeneous Dirichlet walls
 
 CUDA.functional() || error("A working NVIDIA CUDA device is required")
 CUDA.allowscalar(false)
@@ -423,8 +461,9 @@ CUDA.synchronize()  # needed for timings or explicit host-side completion
 
 The CUDA kernel assigns one thread to each system. Adjacent threads operate
 on adjacent systems, using real factors for real or complex right-hand sides.
-A solve performs one kernel launch, with no host transfers or temporary
-RHS arrays. Keep stored fields, factors and boundary vectors on the GPU;
+A Dirichlet solve performs one kernel launch, with no host transfers or
+temporary RHS arrays. Neumann solves additionally check that no unsupported
+singular system is present. Keep stored fields, factors and boundary vectors on the GPU;
 a custom storage-free boundary vector must be compatible with CUDA kernels.
 
 A GPU `update!` also assembles and factors on the device. Device coefficient
@@ -435,9 +474,13 @@ construction only allocates storage.
 
 The CUDA path chooses its own thread-block size.
 
-GPU support covers `BatchedHelmoltzSolver` and `BatchedQuasiTridiagonal`.
-The existing scalar and coupled solvers and FFTW profile transforms retain
-their CPU interfaces.
+GPU support covers `BatchedHelmoltzSolver`, `BatchedCoupledHelmoltzSolver`
+and `BatchedQuasiTridiagonal`. Scalar solvers and FFTW profile transforms
+retain their CPU interfaces. For a coupled solve, transfer the solver and
+fields in the same way, then call `solve!(h_gpu, u_gpu, rhs_gpu)`.
+To rebuild coupled operators on device, use
+`update!(h_gpu, map(CuArray, θs))`. Boundary conditions remain clamped and
+homogeneous. Singular Neumann Poisson batches remain CPU-only.
 
 ### CUDA verification and timing
 
@@ -446,7 +489,7 @@ Run from the repository root on the A100 (or another supported NVIDIA GPU):
 ```sh
 julia --project=test/cuda -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
 julia --project=test/cuda test/cuda/runtests.jl
-julia --project=test/cuda perf/benchmark_cuda.jl
+julia --threads=1 --project=test/cuda perf/benchmark_devices.jl cuda gpu-results.csv
 ```
 
 The CUDA tests require a functional device and fail explicitly if none is
@@ -456,12 +499,100 @@ The benchmark warms up first and synchronizes GPU execution; it measures
 complete batched solves with native y-last storage. Factorisation and data
 transfers are setup costs and are excluded from solve timings.
 
-The ordinary CPU test suite does not load CUDA. GitHub Actions runs it on
-Julia 1.10 and the current stable Julia; that CI is not a GPU verification.
-The reciprocal-pivot implementation has not yet been validated on a GPU or
-benchmarked; the CUDA commands above provide the explicit verification path.
+The ordinary CPU test suite does not load CUDA. The repository includes a
+GitHub Actions workflow for Julia 1.10 and the current stable Julia; that
+CPU workflow is not a GPU verification.
+The CUDA implementation has been validated on an NVIDIA A100 80 GB PCIe,
+with scalar indexing disabled: 7,458 CUDA checks cover the Helmholtz, UL,
+backend-contract and coupled paths. The GPU test target also runs CPU
+reference checks. Recorded logs accompany the benchmark results.
 
-## CPU benchmarks
+## Batched CPU and A100 benchmarks
+
+The current benchmark measures **Helmholtz and coupled Helmholtz** solvers at
+`N_y = 8,16,32,64,128,256,512,1024` coefficients and
+`B = 64,256,1024,4096,16384,65536` systems. Fields use `ComplexF64` in native
+`(system, coefficient)` storage. Every point is the **minimum of 500 warmed
+samples**, with short calls repeated within each sample to reduce timer noise.
+This is a minimum-time estimate, not a typical latency or confidence interval.
+
+The measured solver revision is
+[`92072b1`](https://github.com/Davide-Lasagna-s-Lab/ChebyshevHelmoltzSolvers.jl/commit/92072b170312604ed4f60cfcfcca4d5a08084af5).
+The [raw results and environment records](perf/results/92072b1/README.md)
+identify the hardware, software versions and benchmark script hash.
+
+### Local CPU
+
+These measurements use an Apple M5 MacBook Air, Julia 1.12.6, and one Julia
+and BLAS thread. Batching exposes SIMD across contiguous systems; the solver
+kernels do not use BLAS. The plots show **time per system**, so every batch
+time is divided by $B$. Coupled updates include both factorizations and
+rebuilding the homogeneous responses and influence matrices.
+
+The Mac completed 95 of 96 configurations. The coupled case with
+$N_y=1024$ and $B=65536$ was stopped after memory pressure caused substantial
+swapping on the 16 GB machine. That point is omitted, not extrapolated; the
+compute-node sweep includes it.
+
+![Local batched solve time per system](perf/results/92072b1/local-cpu-solve.png)
+
+![Local batched update time per system](perf/results/92072b1/local-cpu-update.png)
+
+### NVIDIA A100
+
+The A100 80 GB PCIe measurements include a **batched CPU baseline on the same
+compute node**, using one Julia and BLAS thread. The plotted speedup is
+
+$$
+S = \frac{t_{\mathrm{batched\ CPU}}}{t_{\mathrm{A100}}}.
+$$
+
+Values above one favour the GPU. The local Mac timings are separate results
+and are not used in this ratio. CPU batching already uses SIMD; this is not
+a comparison against a scalar loop of independent solvers.
+
+GPU timings include public API checks, kernel launches and synchronization.
+Solver/field construction, compilation and host/device transfers are excluded:
+factors and fields remain on the device. Any work performed inside the public
+solve or update call is included. GPU results are checked against the CPU result
+before timing each configuration. Update timings are measured separately
+from repeated solves.
+
+At the largest Helmholtz case ($N_y=1024$, $B=65536$), the measured solve
+minimum is **5.95 ms on the A100 versus 837 ms on the batched CPU**,
+approximately **141× faster**. Updating the same operator bank takes
+**9.39 ms versus 664 ms**, approximately **71× faster**. These ratios use
+the single-threaded Xeon baseline, not a fully threaded CPU implementation.
+
+At the same largest size, the **coupled** solve takes **15.31 ms versus
+2.41 s**, approximately **157× faster**. Its update, including cached
+homogeneous responses, takes **45.10 ms versus 6.75 s**, approximately
+**150× faster**.
+
+![Helmholtz solve timings and GPU speedup](perf/results/92072b1/a100-helmholtz-solve.png)
+
+![Coupled solve timings and GPU speedup](perf/results/92072b1/a100-coupled-solve.png)
+
+Small batches may be slower on the GPU because launch overhead and too few
+independent systems limit useful parallelism. At larger batch sizes, threads
+work on many independent systems with contiguous accesses. Increasing $N_y$
+alone lengthens each thread's sequential recurrence; it does not create more
+independent GPU work. These are solver measurements, not full DNS speedups.
+
+Operator setup has a different cost from repeated solves. In particular,
+coupled `update!` also recomputes the cached influence responses; its speedup
+must not be inferred from the solve plot.
+
+![Helmholtz update timings and GPU speedup](perf/results/92072b1/a100-helmholtz-update.png)
+
+![Coupled update timings and GPU speedup](perf/results/92072b1/a100-coupled-update.png)
+
+See [reproduction instructions](perf/README.md) for sample-count and size
+controls. No layout conversion is part of these measurements.
+
+<details>
+<summary>Historical scalar-versus-batched CPU comparison (Float64)</summary>
+
 
 Measured on an **Apple M5 MacBook Air**, Julia **1.12.6** (`apple-m1` LLVM
 target), Float64, one Julia thread and one BLAS thread, on 2026-09-23.
@@ -521,9 +652,10 @@ memory traffic, cache capacity and validation costs also affect runtime.
 See [benchmark scripts and reproduction instructions](perf/README.md),
 [raw solve/update measurements](perf/results/helmoltz-cpu.csv), and
 [environment details](perf/results/environment.txt). These are local CPU
-measurements, not complete DNS timings or A100 predictions. The CUDA extension
-loads on this host, but GPU execution and speed remain **unverified**: no
-functional NVIDIA device is available here.
+measurements from the earlier Float64 implementation, not complete DNS
+timings. The newer ComplexF64 CPU/A100 measurements are recorded separately.
+
+</details>
 
 ## Quasi-tridiagonal matrices and UL factorisation
 
