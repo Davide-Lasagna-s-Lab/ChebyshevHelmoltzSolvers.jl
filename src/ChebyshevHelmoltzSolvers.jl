@@ -22,11 +22,11 @@ import Adapt
 
 include("differentiation.jl")
 include("transforms.jl")
-include("quasitridiag.jl")
+include("scalar/quasitridiag.jl")
 include("batched/quasitridiag.jl")
-include("helmoltz.jl")
+include("scalar/helmoltz.jl")
 include("batched/helmoltz.jl")
-include("coupled.jl")
+include("scalar/coupled.jl")
 include("batched/coupled.jl")
 
 end
