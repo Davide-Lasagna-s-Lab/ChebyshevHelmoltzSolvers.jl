@@ -40,6 +40,22 @@ For the algorithms, see [tau discretisation](#the-chebyshev-tau-method),
 [matrix structure](#where-the-structure-comes-from), and
 [the influence matrix](#the-influence-matrix-method).
 
+## Contents
+
+- [Installation](#installation)
+- [Chebyshev representation](#chebyshev-representation)
+- [Scalar Helmholtz solver](#scalar-helmholtz-solver)
+- [Quasi-tridiagonal matrices and UL factorisation](#quasi-tridiagonal-matrices-and-ul-factorisation)
+- [Coupled Helmholtz solver](#coupled-helmholtz-solver)
+- [Batched CPU Helmholtz solves](#batched-cpu-helmholtz-solves)
+- [Batched coupled Helmholtz solves](#batched-coupled-helmholtz-solves)
+- [GPU Helmholtz solves](#gpu-helmholtz-solves)
+- [Batched CPU and A100 benchmarks](#batched-cpu-and-a100-benchmarks)
+- [Cost, reuse and numerical limits](#cost-reuse-and-numerical-limits)
+- [Tests](#tests)
+- [References](#references)
+- [Licence](#licence)
+
 ## Installation
 
 Requires Julia 1.10 or later. Install from GitHub:
