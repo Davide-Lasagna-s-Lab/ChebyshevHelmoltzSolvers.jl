@@ -20,7 +20,7 @@ CPU batching uses SIMD across systems. CPU and GPU do the same solves.
 `Ny` is the number of Chebyshev coefficients (`P+1`). The sweep spans
 8, 16, 32, 64, 128, 256, 512, 1024 coefficients and 64, 256, 1024,
 4096, 16384, 65536 systems for each solver. CSV times are seconds per batch;
-figures divide time by the number of systems. Solve and update timings are
+figures show microseconds per whole batch, without dividing by the number of systems. Solve and update timings are
 separate. Coupled updates include rebuilding the cached influence responses.
 
 Solver/field construction, compilation and host/device transfers are outside

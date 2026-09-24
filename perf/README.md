@@ -51,7 +51,8 @@ performed by the measured call is included. Keep data on the GPU for this use ca
 Coupled updates include both factorisations and rebuilding the cached influence
 responses. GPU results are checked against CPU results before timing.
 
-CSV times are seconds **per whole batch**; plots divide by `B`. Each raw run has
+CSV times are seconds **per whole batch**; plots show microseconds per whole
+batch, without dividing by `B`. Each raw run has
 an environment sidecar recording the source commit, hardware, Julia/CUDA
 versions, sample count, and benchmark script hash. The combined A100 CSV
 identifies the raw source file for each row. Output files are never

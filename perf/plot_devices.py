@@ -30,12 +30,12 @@ if not any(float(r['gpu_solve_seconds']) > 0 for r in rows):
                 if not data:
                     continue
                 x = [int(r['Ny']) for r in data]
-                ax.plot(x, [float(r[f'cpu_{operation}_seconds'])*1e6/b for r in data],
+                ax.plot(x, [float(r[f'cpu_{operation}_seconds'])*1e6 for r in data],
                         color=color, marker=marker, ms=4, label=batch_label(b))
             ax.set(yscale='log', xlabel=r'Coefficient count $N_y$', title=kind.capitalize())
             ax.set_xscale('log', base=2)
             ax.grid(alpha=.2)
-        axes[0].set_ylabel(f'Minimum {operation} time (µs/system)')
+        axes[0].set_ylabel(f'Minimum {operation} time (µs/batch)')
         axes[1].legend(frameon=False, fontsize=8)
         fig.savefig(source.with_name(source.stem+f'-{operation}.png'))
         plt.close(fig)
@@ -49,14 +49,14 @@ if any(float(r['gpu_solve_seconds']) > 0 for r in rows):
                 if not data:
                     continue
                 x = [int(r['Ny']) for r in data]
-                axes[0].plot(x, [float(r[f"cpu_{operation}_seconds"])*1e6/b for r in data], color=color, ls='--', marker=marker, ms=3, mfc='none')
-                axes[0].plot(x, [float(r[f"gpu_{operation}_seconds"])*1e6/b for r in data], color=color, marker=marker, ms=3)
+                axes[0].plot(x, [float(r[f"cpu_{operation}_seconds"])*1e6 for r in data], color=color, ls='--', marker=marker, ms=3, mfc='none')
+                axes[0].plot(x, [float(r[f"gpu_{operation}_seconds"])*1e6 for r in data], color=color, marker=marker, ms=3)
                 axes[1].plot(x, [float(r[f"{operation}_speedup"]) for r in data], color=color, marker=marker, ms=4, label=batch_label(b))
             for ax in axes:
                 ax.set_xscale('log', base=2)
                 ax.set_xlabel(r'Coefficient count $N_y$')
                 ax.grid(alpha=.2)
-            axes[0].set(yscale='log', ylabel=f'Minimum {operation} time (µs/system)', title='Solid: A100; dashed: batched CPU')
+            axes[0].set(yscale='log', ylabel=f'Minimum {operation} time (µs/batch)', title='Solid: A100; dashed: batched CPU')
             axes[1].set_ylabel('Speedup: batched CPU / A100')
             axes[1].set_yscale('log')
             axes[1].axhline(1, color='grey', ls='--', lw=.8)

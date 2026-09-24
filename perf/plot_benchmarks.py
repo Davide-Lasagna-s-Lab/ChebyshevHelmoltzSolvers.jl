@@ -28,9 +28,9 @@ markers = ["o", "s", "^", "D", "v", "P", "X"]
 for batch, color, marker in zip(batches, colors, markers):
     scalar = [data[n, batch, "scalar_contiguous"] for n in ny]
     batched = [data[n, batch, "batched"] for n in ny]
-    axes[0].plot(ny, [t/batch for t in scalar], color=color, ls="--", marker=marker, ms=4,
+    axes[0].plot(ny, scalar, color=color, ls="--", marker=marker, ms=4,
                  markerfacecolor="none")
-    axes[0].plot(ny, [t/batch for t in batched], color=color, marker=marker, ms=4)
+    axes[0].plot(ny, batched, color=color, marker=marker, ms=4)
     axes[1].plot(ny, [s/t for s, t in zip(scalar, batched)],
                  color=color, marker=marker, ms=4, label=batch_label(batch))
 for ax in axes:
@@ -39,7 +39,7 @@ for ax in axes:
     ax.set_xticks(ny, [str(n) for n in ny])
     ax.grid(alpha=0.2)
 axes[0].set_yscale("log")
-axes[0].set_ylabel("Solve time (µs/system)")
+axes[0].set_ylabel("Solve time (µs/batch)")
 axes[0].set_title("Solid: batched · dashed: contiguous scalar")
 axes[1].set_ylabel("Speedup $t_{scalar} / t_{batched}$")
 axes[1].axhline(1, color="#616161", lw=0.8, ls="--")
@@ -53,9 +53,9 @@ fig, axes = plt.subplots(1, 2, figsize=(10, 4), layout="constrained")
 for batch, color, marker in zip(batches, colors, markers):
     scalar = [data[n, batch, "scalar_update"] for n in ny]
     batched = [data[n, batch, "batched_update"] for n in ny]
-    axes[0].plot(ny, [t/batch for t in scalar], color=color, ls="--", marker=marker, ms=4,
+    axes[0].plot(ny, scalar, color=color, ls="--", marker=marker, ms=4,
                  markerfacecolor="none")
-    axes[0].plot(ny, [t/batch for t in batched], color=color, marker=marker, ms=4)
+    axes[0].plot(ny, batched, color=color, marker=marker, ms=4)
     axes[1].plot(ny, [s/t for s, t in zip(scalar, batched)],
                  color=color, marker=marker, ms=4, label=batch_label(batch))
 for ax in axes:
@@ -64,7 +64,7 @@ for ax in axes:
     ax.set_xlabel("Chebyshev coefficient count $N_y$")
     ax.grid(alpha=0.2)
 axes[0].set_yscale("log")
-axes[0].set_ylabel("Update time (µs/system)")
+axes[0].set_ylabel("Update time (µs/batch)")
 axes[0].set_title("Solid: batched · dashed: scalar")
 axes[1].set_ylabel("Speedup $t_{scalar} / t_{batched}$")
 axes[1].axhline(1, color="#616161", lw=0.8, ls="--")

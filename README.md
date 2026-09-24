@@ -940,15 +940,14 @@ identify the hardware, software versions and benchmark script hash.
 
 All figures use $N_y$ on the horizontal axis and one colour/marker per
 system count. Legends such as $8^2$ mean 64 independent systems. Timing
-panels show microseconds **per system**: divide the batch time by $B$.
+panels show microseconds **per whole batch**, including all $B$ systems.
 Speedup panels show a ratio, not a time.
 
 ### Local CPU
 
 These measurements use an Apple M5 MacBook Air, Julia 1.12.6, and one Julia
 and BLAS thread. Batching exposes SIMD across contiguous systems; the solver
-kernels do not use BLAS. The plots show **time per system**, so every batch
-time is divided by $B$. Coupled updates include both factorizations and
+kernels do not use BLAS. The plots show **time per whole batch**, without dividing by $B$. Coupled updates include both factorizations and
 rebuilding the homogeneous responses and influence matrices.
 
 The Mac completed 95 of 96 configurations. The coupled case with
@@ -956,9 +955,9 @@ $N_y=1024$ and $B=65536$ was stopped after memory pressure caused substantial
 swapping on the 16 GB machine. That point is omitted, not extrapolated; the
 compute-node sweep includes it.
 
-![Local batched solve time per system](perf/results/92072b1/local-cpu-solve.png)
+![Local batched solve time per batch](perf/results/92072b1/local-cpu-solve.png)
 
-![Local batched update time per system](perf/results/92072b1/local-cpu-update.png)
+![Local batched update time per batch](perf/results/92072b1/local-cpu-update.png)
 
 ### NVIDIA A100
 
@@ -1020,7 +1019,8 @@ target), Float64, one Julia thread and one BLAS thread, on 2026-09-23.
 These are **complete Helmholtz solves**, including RHS assembly, boundary
 conditions, both parity substitutions and public API checks. Factors are
 reused. Each point is the minimum of 100 warmed samples. The solve-time plot
-shows time per system (batch time divided by $B$), as does the update figure.
+shows the time to solve all $B$ systems, and the update figure shows the time
+to update all $B$ systems.
 Both speedup plots use $N_y$ on the horizontal axis, with one curve per
 system count and matching colours and markers.
 
